@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Versionsnummer (z. B. 0.1.0)'
+        description: 'Versionsnummer (z. B. 0.1.1) — leeres Feld nicht absenden, sonst landet die APK im falschen Release'
         required: true
-        default: '0.1.0'
 
 permissions:
   contents: write
