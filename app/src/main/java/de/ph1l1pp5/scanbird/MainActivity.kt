@@ -1,13 +1,12 @@
 package de.ph1l1pp5.scanbird
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.net.Uri
+import android.graphics.Matrix
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -48,13 +47,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
+import androidx.exifinterface.media.ExifInterface
 import de.ph1l1pp5.scanbird.data.AppDatabase
 import de.ph1l1pp5.scanbird.data.ScanDao
 import de.ph1l1pp5.scanbird.data.ScanEntity
 import de.ph1l1pp5.scanbird.data.SettingsStore
 import de.ph1l1pp5.scanbird.mail.MailSender
 import de.ph1l1pp5.scanbird.pdf.PdfWriter
+import de.ph1l1pp5.scanbird.scan.DocumentFinder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -100,46 +100,37 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 
     val scans by dao.allNewestFirst().collectAsState(initial = emptyList())
 
+    var showScanner by remember { mutableStateOf(false) }
     var pendingCaptureFile by remember { mutableStateOf<File?>(null) }
-    var pendingCaptureUri by remember { mutableStateOf<Uri?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var titleInput by remember { mutableStateOf("") }
     var saveErrorDetail by remember { mutableStateOf<String?>(null) }
 
-    val camera = rememberLauncherForActivityResult(
-        ActivityResultContracts.TakePicture()
-    ) { ok ->
-        if (ok && pendingCaptureUri != null) {
-            titleInput = defaultTitle()
-            showSaveDialog = true
-        }
-    }
-
-    fun startScan() {
-        val dir = File(context.cacheDir, "captures").apply { mkdirs() }
-        val file = File(dir, "foto_${System.currentTimeMillis()}.jpg")
-        val uri = FileProvider.getUriForFile(
-            context, "de.ph1l1pp5.scanbird.fileprovider", file
+    if (showScanner) {
+        ScanScreen(
+            onClose = { showScanner = false },
+            onCapture = { file ->
+                pendingCaptureFile = file
+                showScanner = false
+                titleInput = defaultTitle()
+                showSaveDialog = true
+            }
         )
-        pendingCaptureFile = file
-        pendingCaptureUri = uri
-        camera.launch(uri)
+        return
     }
 
     fun saveNow() {
-        val uri = pendingCaptureUri
         val file = pendingCaptureFile
-        if (uri == null || file == null) {
+        if (file == null) {
             showSaveDialog = false
             return
         }
         val title = titleInput.ifBlank { defaultTitle() }
         scope.launch {
-            val errorText = saveScan(context, file, uri, title, dao)
+            val errorText = saveScan(context, file, title, dao)
             showSaveDialog = false
             if (errorText == null) {
                 pendingCaptureFile = null
-                pendingCaptureUri = null
             } else {
                 saveErrorDetail = errorText
             }
@@ -161,7 +152,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { startScan() }) {
+            FloatingActionButton(onClick = { showScanner = true }) {
                 Icon(
                     Icons.Filled.Add,
                     contentDescription = stringResource(R.string.scan)
@@ -305,19 +296,14 @@ private fun formatDate(millis: Long): String =
 private suspend fun saveScan(
     context: Context,
     photoFile: File,
-    photoUri: Uri,
     title: String,
     dao: ScanDao
 ): String? = withContext(Dispatchers.IO) {
     try {
-        // Erst Maße lesen — manche Kameras (z. B. GrapheneOS-Camera) melden der aufrufenden
-        // App Erfolg, bevor das Foto fertig geschrieben ist: kurz warten und erneut probieren.
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         var readable = false
         for (attempt in 0..9) {
-            context.contentResolver.openInputStream(photoUri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, bounds)
-            }
+            BitmapFactory.decodeFile(photoFile.absolutePath, bounds)
             if (bounds.outWidth > 0) {
                 readable = true
                 break
@@ -331,22 +317,25 @@ private suspend fun saveScan(
         }
 
         var sample = 1
-        while (bounds.outWidth / (sample * 2) >= 620) sample *= 2
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1200) sample *= 2
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-        val bitmap = context.contentResolver.openInputStream(photoUri)?.use {
-            BitmapFactory.decodeStream(it, null, opts)
-        }
-        if (bitmap == null) {
-            return@withContext context.getString(R.string.error_photo_empty)
-        }
+        val rawBitmap = BitmapFactory.decodeFile(photoFile.absolutePath, opts)
+            ?: return@withContext context.getString(R.string.error_photo_empty)
+
+        val upright = applyExifRotation(photoFile.absolutePath, rawBitmap)
 
         val safeFileTitle = title.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
         val fileName = System.currentTimeMillis().toString() + "_" + safeFileTitle + ".pdf"
         val scansDir = File(context.filesDir, "scans").apply { mkdirs() }
         val pdfFile = File(scansDir, fileName)
 
-        PdfWriter.write(bitmap, pdfFile)
-        bitmap.recycle()
+        val page = DocumentFinder.extractPage(upright)
+        if (page !== upright) {
+            upright.recycle()
+        }
+
+        PdfWriter.write(page, pdfFile)
+        page.recycle()
 
         dao.insert(
             ScanEntity(
@@ -355,8 +344,30 @@ private suspend fun saveScan(
                 pdfFileName = fileName
             )
         )
+        photoFile.delete()
         null
     } catch (e: Exception) {
         "Fehler: " + (e.message ?: e.javaClass.simpleName)
     }
+}
+
+// JPEGs tragen die Drehung in den EXIF-Daten; BitmapFactory ignoriert sie, wir nicht.
+private fun applyExifRotation(path: String, bitmap: Bitmap): Bitmap {
+    val orientation = try {
+        ExifInterface(path).getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL
+        )
+    } catch (e: Exception) {
+        ExifInterface.ORIENTATION_NORMAL
+    }
+    val degrees = when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> 90
+        ExifInterface.ORIENTATION_ROTATE_180 -> 180
+        ExifInterface.ORIENTATION_ROTATE_270 -> 270
+        else -> 0
+    }
+    if (degrees == 0) return bitmap
+    val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
+    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 }

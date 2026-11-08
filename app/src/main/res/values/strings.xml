@@ -4,6 +4,7 @@
     <string name="scan">Scannen</string>
     <string name="settings">Einstellungen</string>
     <string name="back">Zurück</string>
+    <string name="close">Schließen</string>
     <string name="empty_history">Noch keine Scans. Tippe auf den Knopf, um das erste Blatt zu scannen.</string>
     <string name="send_as_mail">Als Mail verschicken</string>
     <string name="save_title">Wie soll der Scan heißen?</string>
@@ -13,6 +14,12 @@
     <string name="error_save_title">Speichern fehlgeschlagen</string>
     <string name="error_photo_unreadable">Die Kamera hat kein lesbares Foto hinterlegt (Dateigröße: %1$d Bytes). Bitte erneut scannen.</string>
     <string name="error_photo_empty">Das Foto ließ sich nicht lesen. Bitte erneut scannen.</string>
+    <string name="scan_hint">Blatt in den Rahmen legen — Scanbird löst von selbst aus, wenn das Bild ruhig bleibt.</string>
+    <string name="scan_torch_on">Blitz an</string>
+    <string name="scan_torch_off">Blitz aus</string>
+    <string name="scan_shutter">Jetzt scannen</string>
+    <string name="scan_no_permission">Ohne Kameraberechtigung kann Scanbird nicht scannen. Bitte die Berechtigung für Scanbird in den Android-Einstellungen erlauben und das Scannen erneut starten.</string>
+    <string name="scan_camera_error">Die Kamera lässt sich nicht starten.</string>
     <string name="standard_text">Standardtext für die Mail</string>
     <string name="mail_chooser_title">Mail verschicken über</string>
     <string name="standardtext_in_clipboard">Der Standardtext liegt zusätzlich in der Zwischenablage.</string>
