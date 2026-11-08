@@ -20,6 +20,8 @@
     <string name="scan_shutter">Jetzt scannen</string>
     <string name="scan_no_permission">Ohne Kameraberechtigung kann Scanbird nicht scannen. Bitte die Berechtigung für Scanbird in den Android-Einstellungen erlauben und das Scannen erneut starten.</string>
     <string name="scan_camera_error">Die Kamera lässt sich nicht starten.</string>
+    <string name="pdf_loading">Wird geladen…</string>
+    <string name="pdf_error_title">Das PDF ließ sich nicht öffnen.</string>
     <string name="standard_text">Standardtext für die Mail</string>
     <string name="mail_chooser_title">Mail verschicken über</string>
     <string name="standardtext_in_clipboard">Der Standardtext liegt zusätzlich in der Zwischenablage.</string>

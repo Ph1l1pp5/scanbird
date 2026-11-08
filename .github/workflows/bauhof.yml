@@ -34,11 +34,55 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Build-Tools in den Pfad legen
+        run: |
+          BTOOLS=$(dirname "$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -1)")
+          echo "$BTOOLS" >> "$GITHUB_PATH"
+
       - name: APK bauen
-        run: gradle assembleDebug
+        run: gradle assembleRelease
+
+      - name: Tresor holen oder Erstbetrieb
+        id: keystore
+        env:
+          RAW_KEYSTORE_B64: ${{ secrets.SCANBIRD_KEYSTORE_B64 }}
+          RAW_KEYSTORE_PASS: ${{ secrets.SCANBIRD_KEYSTORE_PASS }}
+        run: |
+          SP="$(echo "$RAW_KEYSTORE_PASS" | tr -d '[:space:]')"
+          if [ -n "$RAW_KEYSTORE_B64" ] && [ -n "$SP" ]; then
+            echo "$RAW_KEYSTORE_B64" | base64 -d > scanbird.keystore
+            if ! keytool -list -keystore scanbird.keystore -storepass "$SP" > /dev/null 2>&1; then
+              echo "TRESOR-FEHLER: Der Keystore lässt sich nicht öffnen — Secrets SCANBIRD_KEYSTORE_B64 (exakte Base64) und SCANBIRD_KEYSTORE_PASS prüfen."
+              exit 1
+            fi
+            echo "secret=true" >> "$GITHUB_OUTPUT"
+          else
+            keytool -genkeypair -keystore scanbird.keystore -alias scanbird -keyalg RSA -keysize 4096 -validity 10950 -storepass scanbird-betrieb -keypass scanbird-betrieb -dname "CN=Scanbird, O=Scanbird"
+            echo "secret=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Erstbetrieb — Keystore als Artefakt bereitstellen
+        if: steps.keystore.outputs.secret == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanbird-keystore-erstbetrieb
+          retention-days: 7
+          path: scanbird.keystore
+
+      - name: APK ausrichten und signieren
+        env:
+          RAW_KEYSTORE_PASS: ${{ secrets.SCANBIRD_KEYSTORE_PASS }}
+        run: |
+          SP="$(echo "$RAW_KEYSTORE_PASS" | tr -d '[:space:]')"
+          if [ -z "$SP" ]; then
+            SP="scanbird-betrieb"
+          fi
+          zipalign -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk scanbird-aligned.apk
+          apksigner sign --ks scanbird.keystore --ks-pass "pass:$SP" --key-pass "pass:$SP" scanbird-aligned.apk
+          apksigner verify scanbird-aligned.apk
 
       - name: APK klar benennen
-        run: mv app/build/outputs/apk/debug/app-debug.apk scanbird-${{ steps.version.outputs.version }}.apk
+        run: mv scanbird-aligned.apk scanbird-${{ steps.version.outputs.version }}.apk
 
       - name: Release anlegen und APK anhängen
         env:

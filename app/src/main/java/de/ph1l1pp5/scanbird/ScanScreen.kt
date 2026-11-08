@@ -204,10 +204,10 @@ private fun CameraContent(onCapture: (File) -> Unit) {
         )
 
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val frameWidth = size.width * 0.82f
+            val frameWidth = size.width * 0.94f
             var frameHeight = frameWidth * (1754f / 1240f)
-            if (frameHeight > size.height * 0.84f) {
-                frameHeight = size.height * 0.84f
+            if (frameHeight > size.height * 0.88f) {
+                frameHeight = size.height * 0.88f
             }
             val left = (size.width - frameWidth) / 2f
             val top = (size.height - frameHeight) / 2f
