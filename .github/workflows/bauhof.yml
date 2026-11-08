@@ -1,0 +1,47 @@
+name: Bauhof
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versionsnummer (z. B. 0.1.0)'
+        required: true
+        default: '0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code holen
+        uses: actions/checkout@v4
+
+      - name: Java einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle einrichten
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: APK bauen
+        run: gradle assembleDebug
+
+      - name: APK klar benennen
+        run: mv app/build/outputs/apk/debug/app-debug.apk scanbird-${{ inputs.version }}.apk
+
+      - name: Release anlegen und APK anhängen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ inputs.version }}
+        run: |
+          gh release create "$TAG" --target main \
+            "scanbird-${{ inputs.version }}.apk" \
+            --title "Scanbird ${{ inputs.version }}" \
+            --notes "Scan to Mail — Blatt scannen, Mail ist raus. APK herunterladen und installieren." \
+            || gh release upload "$TAG" "scanbird-${{ inputs.version }}.apk" --clobber
