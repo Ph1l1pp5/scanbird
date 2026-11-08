@@ -52,7 +52,7 @@ object DocumentFinder {
                 }
             }
         }
-        val backgroundMean = (backgroundSum / max(1L, backgroundCount)).toInt()
+        val backgroundMean = (backgroundSum / max(1L, backgroundCount.toLong())).toInt()
 
         val histogram = IntArray(256)
         for (v in lum) histogram[v]++
