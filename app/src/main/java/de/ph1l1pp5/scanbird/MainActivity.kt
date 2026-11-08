@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -101,10 +102,21 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
     val scans by dao.allNewestFirst().collectAsState(initial = emptyList())
 
     var showScanner by remember { mutableStateOf(false) }
+    var viewScan by remember { mutableStateOf<ScanEntity?>(null) }
     var pendingCaptureFile by remember { mutableStateOf<File?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var titleInput by remember { mutableStateOf("") }
     var saveErrorDetail by remember { mutableStateOf<String?>(null) }
+
+    val openScan = viewScan
+    if (openScan != null) {
+        PdfPreviewScreen(
+            title = openScan.title,
+            pdfFile = File(File(context.filesDir, "scans"), openScan.pdfFileName),
+            onBack = { viewScan = null }
+        )
+        return
+    }
 
     if (showScanner) {
         ScanScreen(
@@ -181,6 +193,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             ) {
                 items(scans, key = { it.id }) { scan ->
                     ListItem(
+                        modifier = Modifier.clickable { viewScan = scan },
                         headlineContent = { Text(scan.title) },
                         supportingContent = { Text(formatDate(scan.createdAt)) },
                         trailingContent = {
