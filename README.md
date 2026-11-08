@@ -19,7 +19,7 @@ Scanbird ist eine schlichte Android-Scanner-App für den Arbeitsalltag: A4-Blatt
 
 ## Status
 
-Konzeptionsphase. Der Prototyp (Scan → PDF → Verlauf → Share) ist der nächste Meilenstein; der Plan steht in der ROADMAP.md.
+M1-Gerüst steht: Scan → PDF → Verlauf → Teilen als importierbares Android-Studio-Projekt, siehe SETUP.md. Nächste Schritte: Kantenerkennung lokal (M2), Auto-Titel (M3), Qualitätsmessung (M4) und Volltextsuche (M5). Der Plan steht in der ROADMAP.md.
 
 ## Entwicklung und AI-Transparenz
 

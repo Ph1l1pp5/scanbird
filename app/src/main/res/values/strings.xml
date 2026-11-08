@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Scanbird</string>
+    <string name="scan">Scannen</string>
+    <string name="settings">Einstellungen</string>
+    <string name="back">Zurück</string>
+    <string name="empty_history">Noch keine Scans. Tippe auf den Knopf, um das erste Blatt zu scannen.</string>
+    <string name="send_as_mail">Als Mail verschicken</string>
+    <string name="save_title">Wie soll der Scan heißen?</string>
+    <string name="save">Speichern</string>
+    <string name="cancel">Abbrechen</string>
+    <string name="ok">OK</string>
+    <string name="error_save_title">Speichern fehlgeschlagen</string>
+    <string name="error_save_text">Das Foto konnte nicht gespeichert werden. Bitte erneut scannen.</string>
+    <string name="standard_text">Standardtext für die Mail</string>
+    <string name="mail_chooser_title">Mail verschicken über</string>
+    <string name="standardtext_in_clipboard">Der Standardtext liegt zusätzlich in der Zwischenablage.</string>
+</resources>
