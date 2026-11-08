@@ -56,6 +56,7 @@ import de.ph1l1pp5.scanbird.data.SettingsStore
 import de.ph1l1pp5.scanbird.mail.MailSender
 import de.ph1l1pp5.scanbird.pdf.PdfWriter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -99,10 +100,11 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 
     val scans by dao.allNewestFirst().collectAsState(initial = emptyList())
 
+    var pendingCaptureFile by remember { mutableStateOf<File?>(null) }
     var pendingCaptureUri by remember { mutableStateOf<Uri?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var titleInput by remember { mutableStateOf("") }
-    var saveError by remember { mutableStateOf(false) }
+    var saveErrorDetail by remember { mutableStateOf<String?>(null) }
 
     val camera = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
@@ -119,20 +121,28 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         val uri = FileProvider.getUriForFile(
             context, "de.ph1l1pp5.scanbird.fileprovider", file
         )
+        pendingCaptureFile = file
         pendingCaptureUri = uri
         camera.launch(uri)
     }
 
     fun saveNow() {
         val uri = pendingCaptureUri
-        if (uri == null) {
+        val file = pendingCaptureFile
+        if (uri == null || file == null) {
             showSaveDialog = false
             return
         }
         val title = titleInput.ifBlank { defaultTitle() }
         scope.launch {
-            val ok = saveScan(context, uri, title, dao)
-            if (ok) showSaveDialog = false else saveError = true
+            val errorText = saveScan(context, file, uri, title, dao)
+            showSaveDialog = false
+            if (errorText == null) {
+                pendingCaptureFile = null
+                pendingCaptureUri = null
+            } else {
+                saveErrorDetail = errorText
+            }
         }
     }
 
@@ -224,13 +234,14 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         )
     }
 
-    if (saveError) {
+    val errorText = saveErrorDetail
+    if (errorText != null) {
         AlertDialog(
-            onDismissRequest = { saveError = false },
+            onDismissRequest = { saveErrorDetail = null },
             title = { Text(stringResource(R.string.error_save_title)) },
-            text = { Text(stringResource(R.string.error_save_text)) },
+            text = { Text(errorText) },
             confirmButton = {
-                TextButton(onClick = { saveError = false }) {
+                TextButton(onClick = { saveErrorDetail = null }) {
                     Text(stringResource(R.string.ok))
                 }
             }
@@ -290,25 +301,44 @@ private fun defaultTitle(): String =
 private fun formatDate(millis: Long): String =
     SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date(millis))
 
+// Liefert null zurück, wenn das Speichern klappte; sonst eine Klartext-Ursache für den Dialog.
 private suspend fun saveScan(
     context: Context,
+    photoFile: File,
     photoUri: Uri,
     title: String,
     dao: ScanDao
-): Boolean = withContext(Dispatchers.IO) {
+): String? = withContext(Dispatchers.IO) {
     try {
-        // Erst Maße lesen, dann mit passender Größe dekodieren
+        // Erst Maße lesen — manche Kameras (z. B. GrapheneOS-Camera) melden der aufrufenden
+        // App Erfolg, bevor das Foto fertig geschrieben ist: kurz warten und erneut probieren.
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(photoUri)?.use {
-            BitmapFactory.decodeStream(it, null, bounds)
-        } ?: return@withContext false
+        var readable = false
+        for (attempt in 0..9) {
+            context.contentResolver.openInputStream(photoUri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, bounds)
+            }
+            if (bounds.outWidth > 0) {
+                readable = true
+                break
+            }
+            delay(500)
+        }
+        if (!readable) {
+            return@withContext context.getString(
+                R.string.error_photo_unreadable, photoFile.length()
+            )
+        }
 
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= 620) sample *= 2
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         val bitmap = context.contentResolver.openInputStream(photoUri)?.use {
             BitmapFactory.decodeStream(it, null, opts)
-        } ?: return@withContext false
+        }
+        if (bitmap == null) {
+            return@withContext context.getString(R.string.error_photo_empty)
+        }
 
         val safeFileTitle = title.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
         val fileName = System.currentTimeMillis().toString() + "_" + safeFileTitle + ".pdf"
@@ -325,8 +355,8 @@ private suspend fun saveScan(
                 pdfFileName = fileName
             )
         )
-        true
+        null
     } catch (e: Exception) {
-        false
+        "Fehler: " + (e.message ?: e.javaClass.simpleName)
     }
 }
