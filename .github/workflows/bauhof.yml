@@ -2,10 +2,6 @@ name: Bauhof
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Versionsnummer (z. B. 0.1.1) — leeres Feld nicht absenden, sonst landet die APK im falschen Release'
-        required: true
 
 permissions:
   contents: write
@@ -16,6 +12,16 @@ jobs:
     steps:
       - name: Code holen
         uses: actions/checkout@v4
+
+      - name: Versionsnummer aus dem Code lesen
+        id: version
+        run: |
+          VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)
+          if [ -z "$VERSION" ]; then
+            echo "Keine versionName in app/build.gradle.kts gefunden — Abbruch."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Java einrichten
         uses: actions/setup-java@v4
@@ -32,15 +38,15 @@ jobs:
         run: gradle assembleDebug
 
       - name: APK klar benennen
-        run: mv app/build/outputs/apk/debug/app-debug.apk scanbird-${{ inputs.version }}.apk
+        run: mv app/build/outputs/apk/debug/app-debug.apk scanbird-${{ steps.version.outputs.version }}.apk
 
       - name: Release anlegen und APK anhängen
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: v${{ inputs.version }}
+          TAG: v${{ steps.version.outputs.version }}
         run: |
           gh release create "$TAG" --target main \
-            "scanbird-${{ inputs.version }}.apk" \
-            --title "Scanbird ${{ inputs.version }}" \
+            "scanbird-${{ steps.version.outputs.version }}.apk" \
+            --title "Scanbird ${{ steps.version.outputs.version }}" \
             --notes "Scan to Mail — Blatt scannen, Mail ist raus. APK herunterladen und installieren." \
-            || gh release upload "$TAG" "scanbird-${{ inputs.version }}.apk" --clobber
+            || gh release upload "$TAG" "scanbird-${{ steps.version.outputs.version }}.apk" --clobber
