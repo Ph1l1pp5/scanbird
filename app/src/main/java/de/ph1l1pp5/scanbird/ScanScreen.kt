@@ -15,7 +15,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,11 +41,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -134,7 +130,7 @@ private fun CameraContent(onCapture: (File) -> Unit) {
     var cameraError by remember { mutableStateOf(false) }
     val capturing = remember { AtomicBoolean(false) }
 
-    // Fortschritt der Ruhe-Erkennung (0..1) — treibt den AutoSnap-Zielsucher-Puls.
+    // Fortschritt der Ruhe-Erkennung (0..1) — treibt den AutoSnap-Puls.
     var snapProgress by remember { mutableStateOf(0f) }
     var snapGlow by remember { mutableStateOf(1f) }
 
@@ -218,122 +214,39 @@ private fun CameraContent(onCapture: (File) -> Unit) {
             modifier = Modifier.fillMaxSize()
         )
 
-        // Sucher-Rahmen: das Scanbird-Symbol-Handy in Cyan-Neon.
-        // Alle Maße stammen aus der Symbol-Vermessung (Rahmenbreite 219) und
-        // werden mit k = frameWidth/219 mitgeführt — Glow, Kern, Notch, Lautsprecher,
-        // Kamera, Bodenpille und Seitentaste sitzen dadurch exakt wie im Icon.
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val frameWidth = size.width * 0.94f
-            var frameHeight = frameWidth * (1754f / 1240f)
-            if (frameHeight > size.height * 0.88f) {
-                frameHeight = size.height * 0.88f
-            }
-            val left = (size.width - frameWidth) / 2f
-            val top = (size.height - frameHeight) / 2f
-            val k = frameWidth / 219f
-            val cyan = Color(0xFF00FFFF)
-            val topLeft = Offset(left, top)
-            val frameSize = Size(frameWidth, frameHeight)
-            val corner = CornerRadius(frameWidth * 0.066f, frameWidth * 0.066f)
-
-            // Rahmen-Glow (weich, halbtransparent)
-            drawRoundRect(
-                color = cyan.copy(alpha = 0.4f),
-                topLeft = topLeft,
-                size = frameSize,
-                cornerRadius = corner,
-                style = Stroke(width = frameWidth * 0.05f)
-            )
-            // Rahmen-Kern
-            drawRoundRect(
-                color = cyan,
-                topLeft = topLeft,
-                size = frameSize,
-                cornerRadius = corner,
-                style = Stroke(width = frameWidth * 0.025f)
-            )
-
-            // Notch-Striche oben links
-            for (i in 0..2) {
-                drawRect(
-                    color = cyan.copy(alpha = 0.9f),
-                    topLeft = Offset(left + (21.1f + i * 12.5f) * k, top + 16.2f * k),
-                    size = Size(10.5f * k, 9.4f * k)
-                )
-            }
-
-            // Lautsprecher-Schlitz
-            drawRoundRect(
-                color = cyan,
-                topLeft = Offset(left + 67.9f * k, top + 16f * k),
-                size = Size(69.5f * k, 7f * k),
-                cornerRadius = CornerRadius(3.5f * k, 3.5f * k),
-                style = Stroke(width = 3f * k)
-            )
-
-            // Kamera-Auge
-            drawCircle(
-                color = cyan,
-                radius = 8f * k,
-                center = Offset(left + 149.7f * k, top + 22.1f * k),
-                style = Stroke(width = 3f * k)
-            )
-
-            // Bodenpille
-            drawRoundRect(
-                color = cyan,
-                topLeft = Offset(left + 77.3f * k, top + frameHeight - 33.9f * k),
-                size = Size(57.1f * k, 19.3f * k),
-                cornerRadius = CornerRadius(9.65f * k, 9.65f * k),
-                style = Stroke(width = 3f * k)
-            )
-
-            // Seitentaste am rechten Rand (dunkler Patch + Neon-Strich)
-            drawRect(
-                color = Color(0xFF0C0C18),
-                topLeft = Offset(left + frameWidth - 6.4f * k, top + 19.3f * k),
-                size = Size(8f * k, 31.4f * k)
-            )
-            drawRoundRect(
-                color = cyan.copy(alpha = 0.9f),
-                topLeft = Offset(left + 214.4f * k, top + 22.9f * k),
-                size = Size(6.4f * k, 26.4f * k),
-                cornerRadius = CornerRadius(2f * k, 2f * k),
-                style = Stroke(width = 1.5f * k)
-            )
-        }
-
-        // AutoSnap-Zielsucher (Philipps 90er-Spielfilm-Wunsch) als HUD-Chip:
-        // Die dunkle Pille hält das Label lesbar — auf weissem Papier wie auf
-        // dunklem Tisch — und der Text bleibt immer voll deckend; pulsiert wird
-        // nur der Cyan-Ring der Pille, dessen Takt mit dem Ruhe-Fortschritt
-        // steigt: langsam am Anfang, schnell kurz vorm Einloggen des Suchers.
+        // AutoSnap-Zielsucher (Philipps 90er-Spielfilm-Wunsch) als mittiger HUD-Chip:
+        // Die dunkle Pille hält das Label lesbar — auf weissem Papier wie auf dunklem
+        // Tisch — und der Text bleibt immer voll deckend; der Chip atmet: im Leerlauf
+        // langsam und rund, sobald das Handy ruhig ueber dem Blatt gehalten wird,
+        // wird der Takt sichtbar hektischer und beschleunigt bis zum Einloggen.
         LaunchedEffect(Unit) {
             while (true) {
                 val progress = snapProgress
                 if (progress <= 0.02f) {
-                    snapGlow = 1f
-                    delay(150)
+                    // Ruhiges Atmen im Leerlauf: eine runde Welle, ca. 1,8 Sekunden.
+                    animate(1f, 0.25f, animationSpec = tween(900)) { v, _ -> snapGlow = v }
+                    animate(0.25f, 1f, animationSpec = tween(900)) { v, _ -> snapGlow = v }
                 } else {
-                    // Pulsperiode: 1150 ms bei kaum Ruhe, 200 ms kurz vorm Einloggen.
-                    val period = (1150 - 950 * progress).toInt().coerceIn(200, 1150)
-                    animate(1f, 0.35f, animationSpec = tween(period / 2)) { v, _ -> snapGlow = v }
-                    animate(0.35f, 1f, animationSpec = tween(period / 2)) { v, _ -> snapGlow = v }
+                    // Scharf: Takt von 800 ms auf 180 ms, je ruhiger das Bild,
+                    // desto hektischer — bis der Sucher einloggt und knipst.
+                    val period = (800 - 620 * progress).toInt().coerceIn(180, 800)
+                    animate(1f, 0f, animationSpec = tween(period / 2)) { v, _ -> snapGlow = v }
+                    animate(0f, 1f, animationSpec = tween(period / 2)) { v, _ -> snapGlow = v }
                 }
             }
         }
         val armed = snapProgress > 0.02f
         Box(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 124.dp)
+                .align(Alignment.Center)
+                .scale(1f + 0.04f * snapGlow)
                 .background(Color(0x99000000), RoundedCornerShape(999.dp))
                 .border(
                     width = if (armed) 2.dp else 1.dp,
                     color = if (armed) {
-                        Color(0xFF00FFFF).copy(alpha = snapGlow)
+                        Color(0xFF00FFFF).copy(alpha = 0.3f + 0.7f * snapGlow)
                     } else {
-                        Color(0x66FFFFFF)
+                        Color(0xFFFFFFFF).copy(alpha = 0.35f + 0.3f * snapGlow)
                     },
                     shape = RoundedCornerShape(999.dp)
                 )
@@ -351,7 +264,7 @@ private fun CameraContent(onCapture: (File) -> Unit) {
         }
 
         // Versions-Bake: unsichtbar unauffaellig, aber auf jedem Screenshot lesbar —
-        // zeigt welcher Bau tatsaechlich laeuft, damit wir Nie-wieder raten muessen.
+        // zeigt welcher Bau tatsaechlich laeuft, damit wir nie wieder raten muessen.
         val versionName = remember {
             try {
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
