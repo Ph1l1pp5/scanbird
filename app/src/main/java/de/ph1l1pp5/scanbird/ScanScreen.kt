@@ -13,6 +13,11 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -130,6 +135,9 @@ private fun CameraContent(onCapture: (File) -> Unit) {
     var cameraError by remember { mutableStateOf(false) }
     val capturing = remember { AtomicBoolean(false) }
 
+    // Fortschritt der Ruhe-Erkennung (0..1) — speist den AutoSnap-Puls.
+    var snapProgress by remember { mutableStateOf(0f) }
+
     val imageCapture = remember {
         ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
@@ -182,7 +190,10 @@ private fun CameraContent(onCapture: (File) -> Unit) {
                             .build()
                         analysis.setAnalyzer(
                             analysisExecutor,
-                            SteadyAnalyzer { mainExecutor.execute { takeShot() } }
+                            SteadyAnalyzer(
+                                onSteady = { mainExecutor.execute { takeShot() } },
+                                onProgress = { progress -> mainExecutor.execute { snapProgress = progress } }
+                            )
                         )
                         provider.unbindAll()
                         val boundCamera = provider.bindToLifecycle(
@@ -292,10 +303,18 @@ private fun CameraContent(onCapture: (File) -> Unit) {
             )
         }
 
-        // AutoSnap-Label: klein, duenn, weiss, mittig ueber dem Ausloeseknopf.
+        // AutoSnap-Label: weiss im Leerlauf, cyan pulsierend in Rahmenfarbe,
+        // sobald die Ruhe-Erkennung scharf ist (ab 35 % Fortschritt).
+        val snapPulse = rememberInfiniteTransition(label = "AutoSnap-Puls")
+        val snapGlow by snapPulse.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(450), RepeatMode.Reverse),
+            label = "AutoSnap-Glow"
+        )
         Text(
             stringResource(R.string.autosnap),
-            color = Color.White,
+            color = if (snapProgress >= 0.35f) Color(0xFF00FFFF).copy(alpha = snapGlow) else Color.White,
             style = MaterialTheme.typography.bodySmall.copy(
                 fontWeight = FontWeight.Light,
                 letterSpacing = 3.sp
@@ -351,9 +370,11 @@ private fun CameraContent(onCapture: (File) -> Unit) {
 /**
  * Bildruhe-Erkennung: ein grobes Helligkeitsraster je Frame; bleibt der Unterschied
  * zum Vorbild über genug Frames klein, gilt das Bild als ruhig und der Auslöser feuert.
+ * Der aktuelle Fortschritt (0..1) wird nebenbei gemeldet — er treibt den AutoSnap-Puls.
  */
 private class SteadyAnalyzer(
-    private val onSteady: () -> Unit
+    private val onSteady: () -> Unit,
+    private val onProgress: (Float) -> Unit
 ) : ImageAnalysis.Analyzer {
 
     private var previous: FloatArray? = null
@@ -397,6 +418,7 @@ private class SteadyAnalyzer(
                     steadyFrames = 0
                     onSteady()
                 }
+                onProgress(steadyFrames / STEADY_TRIGGER.toFloat())
             }
             previous = grid
         } finally {
