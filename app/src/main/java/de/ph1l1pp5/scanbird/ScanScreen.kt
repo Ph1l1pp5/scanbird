@@ -13,6 +13,9 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -54,6 +57,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.delay
 
 /**
  * Vollbild-Scanner: CameraX-Vorschau, Blitz (Taschenlampe) standardmäßig an,
@@ -127,6 +131,14 @@ private fun CameraContent(onCapture: (File) -> Unit) {
     var camera by remember { mutableStateOf<Camera?>(null) }
     var cameraError by remember { mutableStateOf(false) }
     val capturing = remember { AtomicBoolean(false) }
+
+    // Der Hinweis unten ist nur ein Gast: nach vier Sekunden verblasst er,
+    // damit der Sucher dauerhaft sauber bleibt (Philipps Wunsch, 10.11.).
+    var hintVisible by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(4000)
+        hintVisible = false
+    }
 
     val imageCapture = remember {
         ImageCapture.Builder()
@@ -290,15 +302,22 @@ private fun CameraContent(onCapture: (File) -> Unit) {
             )
         }
 
-        Text(
-            stringResource(R.string.scan_hint),
-            color = Color.White,
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(start = 24.dp, end = 24.dp, bottom = 120.dp)
-        )
+        // Hinweis nur kurz einblenden, dann sanft ausblenden.
+        AnimatedVisibility(
+            visible = hintVisible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Text(
+                stringResource(R.string.scan_hint),
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .padding(start = 24.dp, end = 24.dp, bottom = 120.dp)
+            )
+        }
 
         TextButton(
             onClick = { torchOn = !torchOn },
