@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
@@ -45,7 +46,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -303,10 +303,11 @@ private fun CameraContent(onCapture: (File) -> Unit) {
             )
         }
 
-        // AutoSnap-Zielsucher (Philipps 90er-Spielfilm-Wunsch): weiss und ruhig im
-        // Leerlauf; sobald das Bild Ruhe bekommt, pulsiert das Label in Rahmen-Cyan
-        // und die Pulsfrequenz steigt mit dem Fortschritt — langsam am Anfang,
-        // schnell kurz vor dem automatischen Ausloesen, bis der Sucher einloggt.
+        // AutoSnap-Zielsucher (Philipps 90er-Spielfilm-Wunsch) als HUD-Chip:
+        // Die dunkle Pille hält das Label lesbar — auf weissem Papier wie auf
+        // dunklem Tisch — und der Text bleibt immer voll deckend; pulsiert wird
+        // nur der Cyan-Ring der Pille, dessen Takt mit dem Ruhe-Fortschritt
+        // steigt: langsam am Anfang, schnell kurz vorm Einloggen des Suchers.
         LaunchedEffect(Unit) {
             while (true) {
                 val progress = snapProgress
@@ -321,18 +322,50 @@ private fun CameraContent(onCapture: (File) -> Unit) {
                 }
             }
         }
-        Text(
-            stringResource(R.string.autosnap),
-            color = if (snapProgress > 0.02f) Color(0xFF00FFFF).copy(alpha = snapGlow) else Color.White,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontWeight = FontWeight.Light,
-                fontSize = 16.sp,
-                letterSpacing = 4.sp,
-                shadow = Shadow(color = Color(0xB3000000), blurRadius = 8f)
-            ),
+        val armed = snapProgress > 0.02f
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 124.dp)
+                .background(Color(0x99000000), RoundedCornerShape(999.dp))
+                .border(
+                    width = if (armed) 2.dp else 1.dp,
+                    color = if (armed) {
+                        Color(0xFF00FFFF).copy(alpha = snapGlow)
+                    } else {
+                        Color(0x66FFFFFF)
+                    },
+                    shape = RoundedCornerShape(999.dp)
+                )
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+        ) {
+            Text(
+                stringResource(R.string.autosnap),
+                color = if (armed) Color(0xFF00FFFF) else Color.White,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = FontWeight.Normal,
+                    fontSize = 16.sp,
+                    letterSpacing = 4.sp
+                )
+            )
+        }
+
+        // Versions-Bake: unsichtbar unauffaellig, aber auf jedem Screenshot lesbar —
+        // zeigt welcher Bau tatsaechlich laeuft, damit wir Nie-wieder raten muessen.
+        val versionName = remember {
+            try {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
+            } catch (e: Exception) {
+                "?"
+            }
+        }
+        Text(
+            "v" + versionName,
+            color = Color.White.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 12.dp, bottom = 10.dp)
         )
 
         TextButton(
