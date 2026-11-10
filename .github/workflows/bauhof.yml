@@ -52,9 +52,10 @@ jobs:
           if [ -n "$RAW_KEYSTORE_B64" ] && [ -n "$SP" ]; then
             echo "$RAW_KEYSTORE_B64" | base64 -d > scanbird.keystore 2>/dev/null || true
             echo "Tresor-Diagnose: Base64-Laenge ${#RAW_KEYSTORE_B64} Zeichen, dekodiert $(wc -c < scanbird.keystore) Bytes."
-            if ! keytool -list -keystore scanbird.keystore -storepass "$SP" > /dev/null 2>&1; then
+            if ! keytool -list -keystore scanbird.keystore -storepass "$SP" > /dev/null 2>/tmp/kt.err; then
               echo "TRESOR-FEHLER: Der Keystore lässt sich nicht öffnen — Secrets SCANBIRD_KEYSTORE_B64 (exakte Base64) und SCANBIRD_KEYSTORE_PASS prüfen."
-              echo "Hinweis: 0 oder wenige Bytes dekodiert = Base64 unvollständig oder mit CRLF verdreht; plausible Größe, trotzdem Fehler = falsches Passwort oder falsche Datei encoded (z.B. ZIP statt Keystore)."
+              echo "Keytool meldet: $(grep -v -i 'warning' /tmp/kt.err | grep -m1 . || echo keine Meldung)"
+              echo "Deutung: 'password was incorrect' = SCANBIRD_KEYSTORE_PASS stimmt nicht (erwartet exakt scanbird-betrieb); 'Invalid keystore format' = dekodierte Datei ist kein Keystore."
               exit 1
             fi
             echo "secret=true" >> "$GITHUB_OUTPUT"
