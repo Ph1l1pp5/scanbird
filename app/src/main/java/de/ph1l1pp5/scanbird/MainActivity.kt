@@ -47,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.exifinterface.media.ExifInterface
 import de.ph1l1pp5.scanbird.data.AppDatabase
@@ -182,7 +183,9 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             ) {
                 Text(
                     stringResource(R.string.empty_history),
-                    style = MaterialTheme.typography.bodyLarge
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 32.dp)
                 )
             }
         } else {
@@ -384,3 +387,4 @@ private fun applyExifRotation(path: String, bitmap: Bitmap): Bitmap {
     val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
     return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 }
+
