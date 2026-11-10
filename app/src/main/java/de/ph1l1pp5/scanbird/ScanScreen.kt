@@ -218,7 +218,7 @@ private fun CameraContent(onCapture: (File) -> Unit) {
         // Die dunkle Pille hält das Label lesbar — auf weissem Papier wie auf dunklem
         // Tisch — und der Text bleibt immer voll deckend; der Chip atmet: im Leerlauf
         // langsam und rund, sobald das Handy ruhig ueber dem Blatt gehalten wird,
-        // wird der Takt sichtbar hektischer und beschleunigt bis zum Einloggen.
+        // steil hektischer werdend bis zum Einloggen und Knipsen.
         LaunchedEffect(Unit) {
             while (true) {
                 val progress = snapProgress
@@ -227,9 +227,9 @@ private fun CameraContent(onCapture: (File) -> Unit) {
                     animate(1f, 0.25f, animationSpec = tween(900)) { v, _ -> snapGlow = v }
                     animate(0.25f, 1f, animationSpec = tween(900)) { v, _ -> snapGlow = v }
                 } else {
-                    // Scharf: Takt von 800 ms auf 180 ms, je ruhiger das Bild,
-                    // desto hektischer — bis der Sucher einloggt und knipst.
-                    val period = (800 - 620 * progress).toInt().coerceIn(180, 800)
+                    // Scharf: steile Rampe von 550 ms auf 120 ms — der Puls sprint
+                    // schneller schneller, je ruhiger das Bild, bis er einloggt.
+                    val period = (550 - 430 * progress).toInt().coerceIn(120, 550)
                     animate(1f, 0f, animationSpec = tween(period / 2)) { v, _ -> snapGlow = v }
                     animate(0f, 1f, animationSpec = tween(period / 2)) { v, _ -> snapGlow = v }
                 }
@@ -384,9 +384,9 @@ private class SteadyAnalyzer(
     }
 
     companion object {
-        // 45 ruhige Frames (ca. 1,5 Sekunden): gibt dem AutoSnap-Zielsucher Zeit,
-        // von langsam nach schnell zu beschleunigen, bevor der Ausloeser einloggt.
-        private const val STEADY_TRIGGER = 45
+        // 24 ruhige Frames (ca. 0,8 Sekunden): knackige Reaktion — der
+        // AutoSnap-Zielsucher sprint in dieser Zeit auf Sparbrand-Takt.
+        private const val STEADY_TRIGGER = 24
     }
 
 }
