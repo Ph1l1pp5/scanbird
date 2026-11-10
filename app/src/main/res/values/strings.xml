@@ -14,7 +14,7 @@
     <string name="error_save_title">Speichern fehlgeschlagen</string>
     <string name="error_photo_unreadable">Die Kamera hat kein lesbares Foto hinterlegt (Dateigröße: %1$d Bytes). Bitte erneut scannen.</string>
     <string name="error_photo_empty">Das Foto ließ sich nicht lesen. Bitte erneut scannen.</string>
-    <string name="scan_hint">Blatt in den Rahmen legen — Scanbird löst von selbst aus, wenn das Bild ruhig bleibt.</string>
+    <string name="autosnap">AutoSnap</string>
     <string name="scan_torch_on">Blitz an</string>
     <string name="scan_torch_off">Blitz aus</string>
     <string name="scan_shutter">Jetzt scannen</string>

@@ -13,9 +13,6 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -49,15 +46,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.coroutines.delay
 
 /**
  * Vollbild-Scanner: CameraX-Vorschau, Blitz (Taschenlampe) standardmäßig an,
@@ -131,14 +129,6 @@ private fun CameraContent(onCapture: (File) -> Unit) {
     var camera by remember { mutableStateOf<Camera?>(null) }
     var cameraError by remember { mutableStateOf(false) }
     val capturing = remember { AtomicBoolean(false) }
-
-    // Der Hinweis unten ist nur ein Gast: nach vier Sekunden verblasst er,
-    // damit der Sucher dauerhaft sauber bleibt (Philipps Wunsch, 10.11.).
-    var hintVisible by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        delay(4000)
-        hintVisible = false
-    }
 
     val imageCapture = remember {
         ImageCapture.Builder()
@@ -302,22 +292,18 @@ private fun CameraContent(onCapture: (File) -> Unit) {
             )
         }
 
-        // Hinweis nur kurz einblenden, dann sanft ausblenden.
-        AnimatedVisibility(
-            visible = hintVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter)
-        ) {
-            Text(
-                stringResource(R.string.scan_hint),
-                color = Color.White,
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .padding(start = 24.dp, end = 24.dp, bottom = 120.dp)
-            )
-        }
+        // AutoSnap-Label: klein, duenn, weiss, mittig ueber dem Ausloeseknopf.
+        Text(
+            stringResource(R.string.autosnap),
+            color = Color.White,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontWeight = FontWeight.Light,
+                letterSpacing = 3.sp
+            ),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 128.dp)
+        )
 
         TextButton(
             onClick = { torchOn = !torchOn },
