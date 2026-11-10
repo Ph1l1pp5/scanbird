@@ -7,14 +7,14 @@
     android:viewportHeight="512">
 
     <!-- Scanbird-Symbol: cyan Neon-Handy auf weissem Blatt, silberner Vogel, vier Sterne.
-         512er-Komposition auf die 66dp-Safe-Zone skaliert (0.1289, Pivot 256, Translate -202). -->
+         Skalierung 0.65 um den Viewport-Mittelpunkt (256,256), KEINE Translation:
+         Der 512er-Viewport wird vom System auf 108dp gemappt, der sichtbare Kreis
+         zeigt das Zentrum ~66dp — das Handy liegt dann bei 27-80dp, sicher im Kreis. -->
     <group
-        android:scaleX="0.1289"
-        android:scaleY="0.1289"
+        android:scaleX="0.65"
+        android:scaleY="0.65"
         android:pivotX="256"
-        android:pivotY="256"
-        android:translateX="-202"
-        android:translateY="-202">
+        android:pivotY="256">
 
         <!-- Display-Innenraum -->
         <path
