@@ -13,10 +13,7 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -48,6 +45,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -61,6 +59,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.delay
 
 /**
  * Vollbild-Scanner: CameraX-Vorschau, Blitz (Taschenlampe) standardmäßig an,
@@ -135,8 +134,9 @@ private fun CameraContent(onCapture: (File) -> Unit) {
     var cameraError by remember { mutableStateOf(false) }
     val capturing = remember { AtomicBoolean(false) }
 
-    // Fortschritt der Ruhe-Erkennung (0..1) — speist den AutoSnap-Puls.
+    // Fortschritt der Ruhe-Erkennung (0..1) — treibt den AutoSnap-Zielsucher-Puls.
     var snapProgress by remember { mutableStateOf(0f) }
+    var snapGlow by remember { mutableStateOf(1f) }
 
     val imageCapture = remember {
         ImageCapture.Builder()
@@ -303,25 +303,36 @@ private fun CameraContent(onCapture: (File) -> Unit) {
             )
         }
 
-        // AutoSnap-Label: weiss im Leerlauf, cyan pulsierend in Rahmenfarbe,
-        // sobald die Ruhe-Erkennung scharf ist (ab 35 % Fortschritt).
-        val snapPulse = rememberInfiniteTransition(label = "AutoSnap-Puls")
-        val snapGlow by snapPulse.animateFloat(
-            initialValue = 0.35f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(450), RepeatMode.Reverse),
-            label = "AutoSnap-Glow"
-        )
+        // AutoSnap-Zielsucher (Philipps 90er-Spielfilm-Wunsch): weiss und ruhig im
+        // Leerlauf; sobald das Bild Ruhe bekommt, pulsiert das Label in Rahmen-Cyan
+        // und die Pulsfrequenz steigt mit dem Fortschritt — langsam am Anfang,
+        // schnell kurz vor dem automatischen Ausloesen, bis der Sucher einloggt.
+        LaunchedEffect(Unit) {
+            while (true) {
+                val progress = snapProgress
+                if (progress <= 0.02f) {
+                    snapGlow = 1f
+                    delay(150)
+                } else {
+                    // Pulsperiode: 1150 ms bei kaum Ruhe, 200 ms kurz vorm Einloggen.
+                    val period = (1150 - 950 * progress).toInt().coerceIn(200, 1150)
+                    animate(1f, 0.35f, animationSpec = tween(period / 2)) { v, _ -> snapGlow = v }
+                    animate(0.35f, 1f, animationSpec = tween(period / 2)) { v, _ -> snapGlow = v }
+                }
+            }
+        }
         Text(
             stringResource(R.string.autosnap),
-            color = if (snapProgress >= 0.35f) Color(0xFF00FFFF).copy(alpha = snapGlow) else Color.White,
-            style = MaterialTheme.typography.bodySmall.copy(
+            color = if (snapProgress > 0.02f) Color(0xFF00FFFF).copy(alpha = snapGlow) else Color.White,
+            style = MaterialTheme.typography.bodyMedium.copy(
                 fontWeight = FontWeight.Light,
-                letterSpacing = 3.sp
+                fontSize = 16.sp,
+                letterSpacing = 4.sp,
+                shadow = Shadow(color = Color(0xB3000000), blurRadius = 8f)
             ),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 128.dp)
+                .padding(bottom = 124.dp)
         )
 
         TextButton(
@@ -427,7 +438,9 @@ private class SteadyAnalyzer(
     }
 
     companion object {
-        private const val STEADY_TRIGGER = 20
+        // 45 ruhige Frames (ca. 1,5 Sekunden): gibt dem AutoSnap-Zielsucher Zeit,
+        // von langsam nach schnell zu beschleunigen, bevor der Ausloeser einloggt.
+        private const val STEADY_TRIGGER = 45
     }
 
 }
