@@ -2,18 +2,18 @@ package de.ph1l1pp5.scanbird.pdf
 
 import android.graphics.Bitmap
 import java.io.ByteArrayOutputStream
-import java.io.File
+import java.io.OutputStream
 import java.util.Locale
 
 /**
  * Minimal-PDF mit JPEG-Einbettung (DCTDecode): eine A4-Seite bei 150 dpi,
  * das Foto als JPEG komprimiert eingebettet statt als Rohpixel.
  *
- * Androids PdfDocument bettet Bitmaps unkomprimiert ein — das blähte jede
- * Scan-Seite auf mehrere Megabyte auf (lahme Uploads, fette Mail-Anhänge).
+ * Androids PdfDocument bettet Bitmaps unkomprimiert ein — das blaehte jede
+ * Scan-Seite auf mehrere Megabyte auf (lahme Uploads, fette Mail-Anhaenge).
  * JPEG-Einbettung bringt dieselbe Seite auf ein paar Hundert Kilobyte.
- * Handgebaut ohne Abhängigkeiten: Catalog, Pages, Page, JPEG-XObject,
- * Content-Stream, xref — Baseline-PDF, das jeder Viewer und PdfRenderer öffnen.
+ * Handgebaut ohne Abhaengigkeiten: Catalog, Pages, Page, JPEG-XObject,
+ * Content-Stream, xref — Baseline-PDF, das jeder Viewer und PdfRenderer oeffnet.
  */
 object PdfWriter {
 
@@ -22,14 +22,15 @@ object PdfWriter {
     private const val A4_HEIGHT_PX = 1754
     private const val PX_TO_PT = 72f / 150f
 
-    fun write(bitmap: Bitmap, target: File) {
+    /** Schreibt die A4-Seite mit dem Foto als JPEG ins Ziel. Schliesst den Stream nicht. */
+    fun writeTo(bitmap: Bitmap, target: OutputStream) {
         // Foto als JPEG einbetten — Baseline-Encoding, wie DCTDecode es verlangt.
         val jpeg = ByteArrayOutputStream().use { out ->
             bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
             out.toByteArray()
         }
 
-        // Bitmap proportional mittig auf die A4-Fläche legen (wie bisher)
+        // Bitmap proportional mittig auf die A4-Flaeche legen
         val scale = minOf(
             A4_WIDTH_PX.toFloat() / bitmap.width,
             A4_HEIGHT_PX.toFloat() / bitmap.height
@@ -45,13 +46,13 @@ object PdfWriter {
             fmt(offsetX) + " " + fmt(offsetY) + " cm /Im0 Do Q"
         val contentBytes = content.toByteArray(Charsets.US_ASCII)
 
-        val out = ByteArrayOutputStream()
+        val pdf = ByteArrayOutputStream()
         val offsets = IntArray(5)
         fun bytes(s: String) {
-            out.write(s.toByteArray(Charsets.US_ASCII))
+            pdf.write(s.toByteArray(Charsets.US_ASCII))
         }
         fun startObj(id: Int) {
-            offsets[id - 1] = out.size()
+            offsets[id - 1] = pdf.size()
             bytes(id.toString() + " 0 obj\n")
         }
 
@@ -72,16 +73,14 @@ object PdfWriter {
                 " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " +
                 jpeg.size + " >>\nstream\n"
         )
-        out.write(jpeg)
+        pdf.write(jpeg)
         bytes("\nendstream\nendobj\n")
         startObj(5)
-        bytes(
-            "<< /Length " + contentBytes.size + " >>\nstream\n"
-        )
-        out.write(contentBytes)
+        bytes("<< /Length " + contentBytes.size + " >>\nstream\n")
+        pdf.write(contentBytes)
         bytes("\nendstream\nendobj\n")
 
-        val xrefPos = out.size()
+        val xrefPos = pdf.size()
         bytes("xref\n0 6\n")
         bytes("0000000000 65535 f \n")
         for (i in 1..5) {
@@ -91,7 +90,8 @@ object PdfWriter {
         bytes(xrefPos.toString())
         bytes("\n%EOF\n")
 
-        target.writeBytes(out.toByteArray())
+        target.write(pdf.toByteArray())
+        target.flush()
     }
 
     private fun fmt(v: Float): String = String.format(Locale.US, "%.2f", v)

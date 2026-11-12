@@ -25,4 +25,11 @@
     <string name="standard_text">Standardtext für die Mail</string>
     <string name="mail_chooser_title">Mail verschicken über</string>
     <string name="standardtext_in_clipboard">Der Standardtext liegt zusätzlich in der Zwischenablage.</string>
+    <string name="rename">Umbenennen</string>
+    <string name="open_folder">Ordner öffnen</string>
+    <string name="delete_scan">Löschen</string>
+    <string name="delete_confirm_title">„%1$s“ löschen?</string>
+    <string name="delete_confirm_text">Das PDF wird vom Handy gelöscht. Das lässt sich nicht rückgängig machen.</string>
+    <string name="error_rename">Umbenennen fehlgeschlagen. Vielleicht gibt es dort schon eine Datei mit diesem Namen.</string>
+    <string name="error_delete">Löschen fehlgeschlagen.</string>
 </resources>

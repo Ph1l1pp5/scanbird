@@ -1,14 +1,20 @@
 package de.ph1l1pp5.scanbird
 
+import android.app.DownloadManager
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +29,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -53,6 +61,7 @@ import androidx.exifinterface.media.ExifInterface
 import de.ph1l1pp5.scanbird.data.AppDatabase
 import de.ph1l1pp5.scanbird.data.ScanDao
 import de.ph1l1pp5.scanbird.data.ScanEntity
+import de.ph1l1pp5.scanbird.data.ScanStore
 import de.ph1l1pp5.scanbird.data.SettingsStore
 import de.ph1l1pp5.scanbird.mail.MailSender
 import de.ph1l1pp5.scanbird.pdf.PdfWriter
@@ -91,7 +100,7 @@ fun ScanbirdApp() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun VerlaufScreen(onOpenSettings: () -> Unit) {
     val context = LocalContext.current
@@ -109,11 +118,80 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
     var titleInput by remember { mutableStateOf("") }
     var saveErrorDetail by remember { mutableStateOf<String?>(null) }
 
+    // Menü per langem Druck: Umbenennen, Ordner öffnen, Löschen.
+    var scanForRename by remember { mutableStateOf<ScanEntity?>(null) }
+    var scanForDelete by remember { mutableStateOf<ScanEntity?>(null) }
+    val folderAvailable = remember { ScanStore.folderIntent(context) != null }
+
+    fun openScanFolder() {
+        val intent = ScanStore.folderIntent(context)
+        if (intent == null) return
+        try {
+            context.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            // Fallback: Download-Übersicht des Systems
+            try {
+                context.startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS))
+            } catch (e2: Exception) {
+            }
+        }
+    }
+
+    fun mailScan(scan: ScanEntity) {
+        scope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                ScanStore.shareUri(context, ScanStore.locate(context, scan.pdfFileName))
+            }
+            mailSender.send(scan.title, uri, settings.standardText)
+        }
+    }
+
+    fun applyRename(scan: ScanEntity, newTitle: String) {
+        scope.launch {
+            val renamed = withContext(Dispatchers.IO) {
+                val safeTitle = newTitle.replace(Regex("[^\p{L}\p{N} ._-]"), "_")
+                // Zeitstempel-Präfix bleibt — Sortierung läuft weiter über den Zeitstempel.
+                val prefix = scan.pdfFileName
+                    .removeSuffix(".pdf")
+                    .substringBefore('_')
+                val newFileName = prefix + "_" + safeTitle + ".pdf"
+                val actual = ScanStore.rename(
+                    context, ScanStore.locate(context, scan.pdfFileName), newFileName
+                )
+                if (actual != null) {
+                    dao.update(scan.copy(title = newTitle, pdfFileName = actual))
+                    true
+                } else {
+                    false
+                }
+            }
+            if (!renamed) {
+                Toast.makeText(context, R.string.error_rename, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    fun applyDelete(scan: ScanEntity) {
+        scope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                val location = ScanStore.locate(context, scan.pdfFileName)
+                val fileGone = ScanStore.delete(context, location)
+                if (fileGone) {
+                    dao.delete(scan)
+                }
+                fileGone
+            }
+            if (!deleted) {
+                Toast.makeText(context, R.string.error_delete, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     val openScan = viewScan
     if (openScan != null) {
         PdfPreviewScreen(
             title = openScan.title,
-            pdfFile = File(File(context.filesDir, "scans"), openScan.pdfFileName),
+            fileName = openScan.pdfFileName,
             onBack = { viewScan = null }
         )
         return
@@ -195,22 +273,53 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
                     .padding(padding)
             ) {
                 items(scans, key = { it.id }) { scan ->
-                    ListItem(
-                        modifier = Modifier.clickable { viewScan = scan },
-                        headlineContent = { Text(scan.title) },
-                        supportingContent = { Text(formatDate(scan.createdAt)) },
-                        trailingContent = {
-                            IconButton(onClick = {
-                                val pdf = File(File(context.filesDir, "scans"), scan.pdfFileName)
-                                mailSender.send(scan.title, pdf, settings.standardText)
-                            }) {
-                                Icon(
-                                    Icons.Filled.Email,
-                                    contentDescription = stringResource(R.string.send_as_mail)
+                    var menuOpen by remember { mutableStateOf(false) }
+                    Box {
+                        ListItem(
+                            modifier = Modifier.combinedClickable(
+                                onClick = { viewScan = scan },
+                                onLongClick = { menuOpen = true }
+                            ),
+                            headlineContent = { Text(scan.title) },
+                            supportingContent = { Text(formatDate(scan.createdAt)) },
+                            trailingContent = {
+                                IconButton(onClick = { mailScan(scan) }) {
+                                    Icon(
+                                        Icons.Filled.Email,
+                                        contentDescription = stringResource(R.string.send_as_mail)
+                                    )
+                                }
+                            }
+                        )
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.rename)) },
+                                onClick = {
+                                    menuOpen = false
+                                    scanForRename = scan
+                                }
+                            )
+                            if (folderAvailable) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.open_folder)) },
+                                    onClick = {
+                                        menuOpen = false
+                                        openScanFolder()
+                                    }
                                 )
                             }
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.delete_scan)) },
+                                onClick = {
+                                    menuOpen = false
+                                    scanForDelete = scan
+                                }
+                            )
                         }
-                    )
+                    }
                 }
             }
         }
@@ -235,6 +344,59 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             },
             dismissButton = {
                 TextButton(onClick = { showSaveDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    val scanToRename = scanForRename
+    if (scanToRename != null) {
+        var renameInput by remember { mutableStateOf(scanToRename.title) }
+        AlertDialog(
+            onDismissRequest = { scanForRename = null },
+            title = { Text(stringResource(R.string.save_title)) },
+            text = {
+                OutlinedTextField(
+                    value = renameInput,
+                    onValueChange = { renameInput = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val newTitle = renameInput.ifBlank { scanToRename.title }
+                    scanForRename = null
+                    applyRename(scanToRename, newTitle)
+                }) {
+                    Text(stringResource(R.string.save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { scanForRename = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    val scanToDelete = scanForDelete
+    if (scanToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { scanForDelete = null },
+            title = { Text(stringResource(R.string.delete_confirm_title, scanToDelete.title)) },
+            text = { Text(stringResource(R.string.delete_confirm_text)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    scanForDelete = null
+                    applyDelete(scanToDelete)
+                }) {
+                    Text(stringResource(R.string.delete_scan))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { scanForDelete = null }) {
                     Text(stringResource(R.string.cancel))
                 }
             }
@@ -340,17 +502,22 @@ private suspend fun saveScan(
 
         val upright = applyExifRotation(photoFile.absolutePath, rawBitmap)
 
-        val safeFileTitle = title.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
+        val safeFileTitle = title.replace(Regex("[^\p{L}\p{N} ._-]"), "_")
         val fileName = System.currentTimeMillis().toString() + "_" + safeFileTitle + ".pdf"
-        val scansDir = File(context.filesDir, "scans").apply { mkdirs() }
-        val pdfFile = File(scansDir, fileName)
 
         val page = DocumentFinder.extractPage(upright)
         if (page !== upright) {
             upright.recycle()
         }
 
-        PdfWriter.write(page, pdfFile)
+        val target = ScanStore.createPdf(context, fileName)
+        try {
+            PdfWriter.writeTo(page, target.stream)
+            target.finish()
+        } catch (e: Exception) {
+            target.abandon()
+            throw e
+        }
         page.recycle()
 
         dao.insert(
@@ -387,4 +554,3 @@ private fun applyExifRotation(path: String, bitmap: Bitmap): Bitmap {
     val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
     return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 }
-

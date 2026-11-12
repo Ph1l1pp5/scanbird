@@ -4,23 +4,16 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
-import androidx.core.content.FileProvider
 import de.ph1l1pp5.scanbird.R
-import java.io.File
 
 class MailSender(private val context: Context) {
 
-    fun send(scanTitle: String, pdfFile: File, standardText: String) {
-        val uri = FileProvider.getUriForFile(
-            context,
-            "de.ph1l1pp5.scanbird.fileprovider",
-            pdfFile
-        )
-
+    fun send(scanTitle: String, pdfUri: Uri, standardText: String) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "application/pdf"
-            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_STREAM, pdfUri)
             putExtra(Intent.EXTRA_SUBJECT, scanTitle)
             putExtra(Intent.EXTRA_TEXT, standardText)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

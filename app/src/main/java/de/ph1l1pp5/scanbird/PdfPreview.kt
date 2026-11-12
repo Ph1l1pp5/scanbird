@@ -29,11 +29,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import de.ph1l1pp5.scanbird.data.ScanStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * Zeigt die erste Seite eines gespeicherten Scans — gerendert mit dem
@@ -43,31 +44,35 @@ import java.io.File
 @Composable
 fun PdfPreviewScreen(
     title: String,
-    pdfFile: File,
+    fileName: String,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var openError by remember { mutableStateOf(false) }
 
-    LaunchedEffect(pdfFile) {
+    LaunchedEffect(fileName) {
         withContext(Dispatchers.IO) {
             var descriptor: ParcelFileDescriptor? = null
             var renderer: PdfRenderer? = null
             var page: PdfRenderer.Page? = null
             try {
-                descriptor = ParcelFileDescriptor.open(
-                    pdfFile,
-                    ParcelFileDescriptor.MODE_READ_ONLY
+                descriptor = ScanStore.openRead(
+                    context, ScanStore.locate(context, fileName)
                 )
-                renderer = PdfRenderer(descriptor)
-                page = renderer.openPage(0)
-                val scale = 2f
-                val width = (page.width * scale).toInt().coerceAtMost(2000)
-                val height = (page.height * scale).toInt().coerceAtMost(2800)
-                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                bitmap.eraseColor(Color.WHITE)
-                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                pageBitmap = bitmap
+                if (descriptor == null) {
+                    openError = true
+                } else {
+                    renderer = PdfRenderer(descriptor)
+                    page = renderer.openPage(0)
+                    val scale = 2f
+                    val width = (page.width * scale).toInt().coerceAtMost(2000)
+                    val height = (page.height * scale).toInt().coerceAtMost(2800)
+                    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                    bitmap.eraseColor(Color.WHITE)
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    pageBitmap = bitmap
+                }
             } catch (e: Exception) {
                 openError = true
             } finally {
