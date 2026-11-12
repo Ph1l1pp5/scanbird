@@ -627,8 +627,8 @@ private suspend fun saveScan(
             delay(500)
         }
         if (!readable) {
-            return@withContext context.getString(
-                R.string.error_photo_unreadable, photoFile.length()
+            return@withContext SaveOutcome(
+                context.getString(R.string.error_photo_unreadable, photoFile.length())
             )
         }
 
@@ -636,7 +636,7 @@ private suspend fun saveScan(
         while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1200) sample *= 2
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         val rawBitmap = BitmapFactory.decodeFile(photoFile.absolutePath, opts)
-            ?: return@withContext context.getString(R.string.error_photo_empty)
+            ?: return@withContext SaveOutcome(context.getString(R.string.error_photo_empty))
 
         val upright = applyExifRotation(photoFile.absolutePath, rawBitmap)
 
