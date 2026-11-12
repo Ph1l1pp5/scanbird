@@ -156,9 +156,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 
     /** Kern des Umbenennens (IO): Datei und Verlaufseintrag auf den neuen Titel ziehen. */
     suspend fun renameScanTo(scan: ScanEntity, newTitle: String): Boolean = withContext(Dispatchers.IO) {
-        val safeTitle = newTitle.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
-            .replace(' ', '_')
-            .take(40)
+        val safeTitle = fileTitle(newTitle)
         // Zeitstempel-Präfix bleibt — Sortierung läuft weiter über den Zeitstempel.
         // Separator "__" (ab 0.2.9); alte Namen nutzten "_".
         val base = scan.pdfFileName.removeSuffix(".pdf")
@@ -640,9 +638,7 @@ private suspend fun saveScan(
 
         val upright = applyExifRotation(photoFile.absolutePath, rawBitmap)
 
-        val safeFileTitle = title.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
-            .replace(' ', '_')
-            .take(40)
+        val safeFileTitle = fileTitle(title)
         // Kurzer, sauberer Dateiname: keine Millisekunden-Ziffernwurst, keine Leerzeichen —
         // lange Namen mit vielen Ziffern blockierten sonst Uploads und Teilen.
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.GERMANY).format(Date())
@@ -683,6 +679,21 @@ private data class SaveOutcome(
     val fileName: String? = null,
     val title: String? = null
 )
+
+/**
+ * Dateinamen-Feile: Umlaute deutsch transliterieren, Sonderzeichen raus, Ergebnis
+ * reines ASCII. Umlaute im Dateinamen brachten sonst Uploads zum Straucheln —
+ * im Verlauf steht der Titel trotzdem mit echten Umlauten.
+ */
+private fun fileTitle(raw: String): String =
+    raw.replace("Ä", "Ae").replace("Ö", "Oe").replace("Ü", "Ue")
+        .replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
+        .replace("ß", "ss")
+        .replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
+        .replace(' ', '_')
+        .map { if (it.code in 32..126) it else '_' }
+        .joinToString("")
+        .take(40)
 
 // JPEGs tragen die Drehung in den EXIF-Daten; BitmapFactory ignoriert sie, wir nicht.
 private fun applyExifRotation(path: String, bitmap: Bitmap): Bitmap {
