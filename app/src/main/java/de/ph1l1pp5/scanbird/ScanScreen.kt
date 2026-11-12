@@ -121,14 +121,33 @@ private fun CameraContent(onCapture: (File) -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
-    DisposableEffect(Unit) {
-        onDispose { analysisExecutor.shutdown() }
-    }
 
     var torchOn by remember { mutableStateOf(true) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var cameraError by remember { mutableStateOf(false) }
     val capturing = remember { AtomicBoolean(false) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            analysisExecutor.shutdown()
+            // Kamera sauber lösen — vorher blieb sie an die Activity gebunden und die
+            // Taschenlampe brannte weiter, während der Speichern-Dialog schon offen war.
+            try {
+                camera?.cameraControl?.enableTorch(false)
+            } catch (e: Exception) {
+            }
+            try {
+                val providerFuture = ProcessCameraProvider.getInstance(context)
+                providerFuture.addListener({
+                    try {
+                        providerFuture.get().unbindAll()
+                    } catch (e: Exception) {
+                    }
+                }, mainExecutor)
+            } catch (e: Exception) {
+            }
+        }
+    }
 
     // Fortschritt der Ruhe-Erkennung (0..1) — treibt den AutoSnap-Puls.
     var snapProgress by remember { mutableStateOf(0f) }
@@ -150,6 +169,11 @@ private fun CameraContent(onCapture: (File) -> Unit) {
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(results: ImageCapture.OutputFileResults) {
                     capturing.set(false)
+                    // Blitz sofort aus — das Licht stirbt mit dem Auslöser, nicht erst später.
+                    try {
+                        camera?.cameraControl?.enableTorch(false)
+                    } catch (e: Exception) {
+                    }
                     onCapture(file)
                 }
 

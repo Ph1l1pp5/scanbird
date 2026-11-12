@@ -26,9 +26,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -118,10 +120,15 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
     var titleInput by remember { mutableStateOf("") }
     var saveErrorDetail by remember { mutableStateOf<String?>(null) }
 
-    // Menü per langem Druck: Umbenennen, Ordner öffnen, Löschen.
+    // Menü per langem Druck: Umbenennen, Ordner öffnen, Löschen, Auswählen.
     var scanForRename by remember { mutableStateOf<ScanEntity?>(null) }
     var scanForDelete by remember { mutableStateOf<ScanEntity?>(null) }
     val folderAvailable = remember { ScanStore.folderIntent(context) != null }
+
+    // Mehrfachauswahl fürs Löschen: langes Drücken → „Auswählen", dann Häkchen setzen.
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<Long>()) }
+    var confirmDeleteMany by remember { mutableStateOf(false) }
 
     fun openScanFolder() {
         val intent = ScanStore.folderIntent(context)
@@ -189,6 +196,30 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         }
     }
 
+    fun applyDeleteMany(ids: Set<Long>) {
+        scope.launch {
+            var anyFailed = false
+            withContext(Dispatchers.IO) {
+                for (scanEntry in scans) {
+                    if (scanEntry.id !in ids) continue
+                    val location = ScanStore.locate(context, scanEntry.pdfFileName)
+                    val gone = ScanStore.delete(context, location) ||
+                        (location is ScanStore.Location.Internal && !location.file.exists())
+                    if (gone) {
+                        dao.delete(scanEntry)
+                    } else {
+                        anyFailed = true
+                    }
+                }
+            }
+            selectionMode = false
+            selectedIds = emptySet()
+            if (anyFailed) {
+                Toast.makeText(context, R.string.error_delete, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     val openScan = viewScan
     if (openScan != null) {
         PdfPreviewScreen(
@@ -233,13 +264,43 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
+                title = {
+                    Text(
+                        if (selectionMode) stringResource(R.string.selected_count, selectedIds.size)
+                        else stringResource(R.string.app_name)
+                    )
+                },
+                navigationIcon = {
+                    if (selectionMode) {
+                        IconButton(onClick = {
+                            selectionMode = false
+                            selectedIds = emptySet()
+                        }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.back)
+                            )
+                        }
+                    }
+                },
                 actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(
-                            Icons.Filled.Settings,
-                            contentDescription = stringResource(R.string.settings)
-                        )
+                    if (selectionMode) {
+                        IconButton(
+                            onClick = { confirmDeleteMany = true },
+                            enabled = selectedIds.isNotEmpty()
+                        ) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = stringResource(R.string.delete_scan)
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(
+                                Icons.Filled.Settings,
+                                contentDescription = stringResource(R.string.settings)
+                            )
+                        }
                     }
                 }
             )
@@ -276,20 +337,41 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             ) {
                 items(scans, key = { it.id }) { scan ->
                     var menuOpen by remember { mutableStateOf(false) }
+                    val isSelected = scan.id in selectedIds
                     Box {
                         ListItem(
                             modifier = Modifier.combinedClickable(
-                                onClick = { viewScan = scan },
-                                onLongClick = { menuOpen = true }
+                                onClick = {
+                                    if (selectionMode) {
+                                        selectedIds = if (isSelected) selectedIds - scan.id
+                                        else selectedIds + scan.id
+                                    } else {
+                                        viewScan = scan
+                                    }
+                                },
+                                onLongClick = { if (!selectionMode) menuOpen = true }
                             ),
+                            leadingContent = {
+                                if (selectionMode) {
+                                    Checkbox(
+                                        checked = isSelected,
+                                        onCheckedChange = {
+                                            selectedIds = if (isSelected) selectedIds - scan.id
+                                            else selectedIds + scan.id
+                                        }
+                                    )
+                                }
+                            },
                             headlineContent = { Text(scan.title) },
                             supportingContent = { Text(formatDate(scan.createdAt)) },
                             trailingContent = {
-                                IconButton(onClick = { mailScan(scan) }) {
-                                    Icon(
-                                        Icons.Filled.Email,
-                                        contentDescription = stringResource(R.string.send_as_mail)
-                                    )
+                                if (!selectionMode) {
+                                    IconButton(onClick = { mailScan(scan) }) {
+                                        Icon(
+                                            Icons.Filled.Email,
+                                            contentDescription = stringResource(R.string.send_as_mail)
+                                        )
+                                    }
                                 }
                             }
                         )
@@ -297,6 +379,14 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
                             expanded = menuOpen,
                             onDismissRequest = { menuOpen = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.select)) },
+                                onClick = {
+                                    menuOpen = false
+                                    selectionMode = true
+                                    selectedIds = setOf(scan.id)
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.rename)) },
                                 onClick = {
@@ -399,6 +489,27 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             },
             dismissButton = {
                 TextButton(onClick = { scanForDelete = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    if (confirmDeleteMany) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteMany = false },
+            title = { Text(stringResource(R.string.delete_confirm_many_title, selectedIds.size)) },
+            text = { Text(stringResource(R.string.delete_confirm_text)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDeleteMany = false
+                    applyDeleteMany(selectedIds)
+                }) {
+                    Text(stringResource(R.string.delete_scan))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteMany = false }) {
                     Text(stringResource(R.string.cancel))
                 }
             }
