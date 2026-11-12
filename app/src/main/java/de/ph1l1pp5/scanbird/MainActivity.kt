@@ -69,6 +69,7 @@ import de.ph1l1pp5.scanbird.mail.MailSender
 import de.ph1l1pp5.scanbird.ocr.TitleOcr
 import de.ph1l1pp5.scanbird.pdf.PdfWriter
 import de.ph1l1pp5.scanbird.scan.DocumentFinder
+import de.ph1l1pp5.scanbird.scan.ScanPolish
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -644,10 +645,15 @@ private suspend fun saveScan(
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.GERMANY).format(Date())
         val fileName = "Scan_" + stamp + "__" + safeFileTitle + ".pdf"
 
-        val page = DocumentFinder.extractPage(upright)
+        var page = DocumentFinder.extractPage(upright)
         if (page !== upright) {
             upright.recycle()
         }
+        // Flachbett-Look: Schatten, Überbelichtung und Knitter plätten,
+        // Ränder füllen, Restschiefe geraderücken — wie vom Flachbett-Scanner.
+        val polished = ScanPolish.polish(page)
+        page.recycle()
+        page = polished
 
         val target = ScanStore.createPdf(context, fileName)
         try {
