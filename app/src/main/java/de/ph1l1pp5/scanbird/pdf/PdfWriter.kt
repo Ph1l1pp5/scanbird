@@ -1,37 +1,98 @@
 package de.ph1l1pp5.scanbird.pdf
 
 import android.graphics.Bitmap
-import android.graphics.Color
-import android.graphics.pdf.PdfDocument
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.Locale
 
+/**
+ * Minimal-PDF mit JPEG-Einbettung (DCTDecode): eine A4-Seite bei 150 dpi,
+ * das Foto als JPEG komprimiert eingebettet statt als Rohpixel.
+ *
+ * Androids PdfDocument bettet Bitmaps unkomprimiert ein — das blähte jede
+ * Scan-Seite auf mehrere Megabyte auf (lahme Uploads, fette Mail-Anhänge).
+ * JPEG-Einbettung bringt dieselbe Seite auf ein paar Hundert Kilobyte.
+ * Handgebaut ohne Abhängigkeiten: Catalog, Pages, Page, JPEG-XObject,
+ * Content-Stream, xref — Baseline-PDF, das jeder Viewer und PdfRenderer öffnen.
+ */
 object PdfWriter {
 
-    // A4 bei 150 dpi: ausreichend für Textblätter, schonend für Speicher und Tempo
-    private const val A4_WIDTH = 1240
-    private const val A4_HEIGHT = 1754
+    // A4 bei 150 dpi in Pixeln; PDF-Punkte: 1 px = 72/150 pt
+    private const val A4_WIDTH_PX = 1240
+    private const val A4_HEIGHT_PX = 1754
+    private const val PX_TO_PT = 72f / 150f
 
     fun write(bitmap: Bitmap, target: File) {
-        val document = PdfDocument()
-        val page = document.startPage(
-            PdfDocument.PageInfo.Builder(A4_WIDTH, A4_HEIGHT, 1).create()
-        )
-        val canvas = page.canvas
-        canvas.drawColor(Color.WHITE)
+        // Foto als JPEG einbetten — Baseline-Encoding, wie DCTDecode es verlangt.
+        val jpeg = ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            out.toByteArray()
+        }
 
-        // Bitmap proportional mittig auf die A4-Fläche legen
+        // Bitmap proportional mittig auf die A4-Fläche legen (wie bisher)
         val scale = minOf(
-            A4_WIDTH.toFloat() / bitmap.width,
-            A4_HEIGHT.toFloat() / bitmap.height
+            A4_WIDTH_PX.toFloat() / bitmap.width,
+            A4_HEIGHT_PX.toFloat() / bitmap.height
         )
-        val width = bitmap.width * scale
-        val height = bitmap.height * scale
-        val left = (A4_WIDTH - width) / 2f
-        val top = (A4_HEIGHT - height) / 2f
-        canvas.drawBitmap(bitmap, left, top, null)
+        val drawWidth = bitmap.width * scale * PX_TO_PT
+        val drawHeight = bitmap.height * scale * PX_TO_PT
+        val offsetX = (A4_WIDTH_PX * PX_TO_PT - drawWidth) / 2f
+        val offsetY = (A4_HEIGHT_PX * PX_TO_PT - drawHeight) / 2f
+        val pageWidth = A4_WIDTH_PX * PX_TO_PT
+        val pageHeight = A4_HEIGHT_PX * PX_TO_PT
 
-        document.finishPage(page)
-        target.outputStream().use { document.writeTo(it) }
-        document.close()
+        val content = "q " + fmt(drawWidth) + " 0 0 " + fmt(drawHeight) + " " +
+            fmt(offsetX) + " " + fmt(offsetY) + " cm /Im0 Do Q"
+        val contentBytes = content.toByteArray(Charsets.US_ASCII)
+
+        val out = ByteArrayOutputStream()
+        val offsets = IntArray(5)
+        fun bytes(s: String) {
+            out.write(s.toByteArray(Charsets.US_ASCII))
+        }
+        fun startObj(id: Int) {
+            offsets[id - 1] = out.size()
+            bytes(id.toString() + " 0 obj\n")
+        }
+
+        bytes("%PDF-1.4\n")
+        startObj(1)
+        bytes("<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+        startObj(2)
+        bytes("<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+        startObj(3)
+        bytes(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + fmt(pageWidth) + " " + fmt(pageHeight) +
+                "] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        )
+        startObj(4)
+        bytes(
+            "<< /Type /XObject /Subtype /Image /Width " + bitmap.width +
+                " /Height " + bitmap.height +
+                " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " +
+                jpeg.size + " >>\nstream\n"
+        )
+        out.write(jpeg)
+        bytes("\nendstream\nendobj\n")
+        startObj(5)
+        bytes(
+            "<< /Length " + contentBytes.size + " >>\nstream\n"
+        )
+        out.write(contentBytes)
+        bytes("\nendstream\nendobj\n")
+
+        val xrefPos = out.size()
+        bytes("xref\n0 6\n")
+        bytes("0000000000 65535 f \n")
+        for (i in 1..5) {
+            bytes(String.format(Locale.US, "%010d 00000 n \n", offsets[i - 1]))
+        }
+        bytes("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n")
+        bytes(xrefPos.toString())
+        bytes("\n%EOF\n")
+
+        target.writeBytes(out.toByteArray())
     }
+
+    private fun fmt(v: Float): String = String.format(Locale.US, "%.2f", v)
 }
