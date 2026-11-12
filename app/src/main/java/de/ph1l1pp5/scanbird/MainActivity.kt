@@ -150,11 +150,13 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         scope.launch {
             val renamed = withContext(Dispatchers.IO) {
                 val safeTitle = newTitle.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
+                    .replace(' ', '_')
+                    .take(40)
                 // Zeitstempel-Präfix bleibt — Sortierung läuft weiter über den Zeitstempel.
-                val prefix = scan.pdfFileName
-                    .removeSuffix(".pdf")
-                    .substringBefore('_')
-                val newFileName = prefix + "_" + safeTitle + ".pdf"
+                // Separator "__" (ab 0.2.9); alte Namen nutzten "_".
+                val base = scan.pdfFileName.removeSuffix(".pdf")
+                val prefix = if (base.contains("__")) base.substringBefore("__") else base.substringBefore('_')
+                val newFileName = prefix + "__" + safeTitle + ".pdf"
                 val actual = ScanStore.rename(
                     context, ScanStore.locate(context, scan.pdfFileName), newFileName
                 )
@@ -503,7 +505,12 @@ private suspend fun saveScan(
         val upright = applyExifRotation(photoFile.absolutePath, rawBitmap)
 
         val safeFileTitle = title.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
-        val fileName = System.currentTimeMillis().toString() + "_" + safeFileTitle + ".pdf"
+            .replace(' ', '_')
+            .take(40)
+        // Kurzer, sauberer Dateiname: keine Millisekunden-Ziffernwurst, keine Leerzeichen —
+        // lange Namen mit vielen Ziffern blockierten sonst Uploads und Teilen.
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.GERMANY).format(Date())
+        val fileName = "Scan_" + stamp + "__" + safeFileTitle + ".pdf"
 
         val page = DocumentFinder.extractPage(upright)
         if (page !== upright) {
