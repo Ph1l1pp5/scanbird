@@ -48,11 +48,16 @@ object TitleOcr {
         return try {
             val tessdataDir = File(context.filesDir, "tessdata")
             val model = File(tessdataDir, "deu.traineddata")
-            if (!model.exists() || model.length() == 0L) {
+            // Modell frisch halten: Wechselt das gebündelte Modell (z. B. fast -> best),
+            // erneuert sich die Kopie auf dem Gerät beim nächsten OCR-Lauf automatisch.
+            val asset = try {
+                context.assets.open("tessdata/deu.traineddata").use { it.readBytes() }
+            } catch (e: Exception) {
+                null
+            }
+            if (asset != null && model.length() != asset.size.toLong()) {
                 tessdataDir.mkdirs()
-                context.assets.open("tessdata/deu.traineddata").use { input ->
-                    model.outputStream().use { output -> input.copyTo(output) }
-                }
+                model.writeBytes(asset)
             }
             val api = TessBaseAPI()
             if (!api.init(context.filesDir.absolutePath + File.separator, "deu")) {
@@ -67,7 +72,7 @@ object TitleOcr {
         }
     }
 
-    /** Rendert Seite 1 des PDFs auf rund 1000 px Breite — fürs Titel-Lesen reicht das locker. */
+    /** Rendert Seite 1 des PDFs in nativer Auflösung (1240 px) — mehr Kante fürs Titel-Lesen. */
     private fun renderFirstPage(fd: ParcelFileDescriptor): Bitmap? {
         var renderer: PdfRenderer? = null
         try {
@@ -76,7 +81,7 @@ object TitleOcr {
             var page: PdfRenderer.Page? = null
             try {
                 page = renderer.openPage(0)
-                val scale = 1000f / page.width
+                val scale = 1240f / page.width
                 val w = (page.width * scale).toInt().coerceAtLeast(1)
                 val h = (page.height * scale).toInt().coerceAtLeast(1)
                 val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
