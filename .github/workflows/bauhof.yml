@@ -13,6 +13,13 @@ jobs:
       - name: Code holen
         uses: actions/checkout@v4
 
+      - name: OCR-Modell holen (Deutsch)
+        run: |
+          mkdir -p app/src/main/assets/tessdata
+          curl -fsSL -o app/src/main/assets/tessdata/deu.traineddata \
+            https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/deu.traineddata
+          test -s app/src/main/assets/tessdata/deu.traineddata
+
       - name: Versionsnummer aus dem Code lesen
         id: version
         run: |

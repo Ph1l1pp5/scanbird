@@ -66,6 +66,7 @@ import de.ph1l1pp5.scanbird.data.ScanEntity
 import de.ph1l1pp5.scanbird.data.ScanStore
 import de.ph1l1pp5.scanbird.data.SettingsStore
 import de.ph1l1pp5.scanbird.mail.MailSender
+import de.ph1l1pp5.scanbird.ocr.TitleOcr
 import de.ph1l1pp5.scanbird.pdf.PdfWriter
 import de.ph1l1pp5.scanbird.scan.DocumentFinder
 import kotlinx.coroutines.Dispatchers
@@ -153,30 +154,53 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         }
     }
 
+    /** Kern des Umbenennens (IO): Datei und Verlaufseintrag auf den neuen Titel ziehen. */
+    suspend fun renameScanTo(scan: ScanEntity, newTitle: String): Boolean = withContext(Dispatchers.IO) {
+        val safeTitle = newTitle.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
+            .replace(' ', '_')
+            .take(40)
+        // Zeitstempel-Präfix bleibt — Sortierung läuft weiter über den Zeitstempel.
+        // Separator "__" (ab 0.2.9); alte Namen nutzten "_".
+        val base = scan.pdfFileName.removeSuffix(".pdf")
+        val prefix = if (base.contains("__")) base.substringBefore("__") else base.substringBefore('_')
+        val newFileName = prefix + "__" + safeTitle + ".pdf"
+        val actual = ScanStore.rename(
+            context, ScanStore.locate(context, scan.pdfFileName), newFileName
+        )
+        if (actual != null) {
+            dao.update(scan.copy(title = newTitle, pdfFileName = actual))
+            true
+        } else {
+            false
+        }
+    }
+
     fun applyRename(scan: ScanEntity, newTitle: String) {
         scope.launch {
-            val renamed = withContext(Dispatchers.IO) {
-                val safeTitle = newTitle.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
-                    .replace(' ', '_')
-                    .take(40)
-                // Zeitstempel-Präfix bleibt — Sortierung läuft weiter über den Zeitstempel.
-                // Separator "__" (ab 0.2.9); alte Namen nutzten "_".
-                val base = scan.pdfFileName.removeSuffix(".pdf")
-                val prefix = if (base.contains("__")) base.substringBefore("__") else base.substringBefore('_')
-                val newFileName = prefix + "__" + safeTitle + ".pdf"
-                val actual = ScanStore.rename(
-                    context, ScanStore.locate(context, scan.pdfFileName), newFileName
-                )
-                if (actual != null) {
-                    dao.update(scan.copy(title = newTitle, pdfFileName = actual))
-                    true
-                } else {
-                    false
-                }
-            }
+            val renamed = renameScanTo(scan, newTitle)
             if (!renamed) {
                 Toast.makeText(context, R.string.error_rename, Toast.LENGTH_LONG).show()
             }
+        }
+    }
+
+    // M3 — Titel automatisch erkennen: Tesseract liest komplett offline, asynchron
+    // nach dem Speichern. Nur wenn niemand inzwischen von Hand benannt hat,
+    // setzt sich der erkannte Titel durch; der Verlauf aktualisiert sich von selbst.
+    fun autoTitleScan(fileName: String?, savedTitle: String?) {
+        if (fileName == null || savedTitle == null) return
+        scope.launch {
+            val newTitle = withContext(Dispatchers.IO) {
+                try {
+                    TitleOcr.extractTitle(context, fileName)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            if (newTitle.isNullOrBlank() || newTitle == savedTitle) return@launch
+            val scanEntry = withContext(Dispatchers.IO) { dao.findByFile(fileName) } ?: return@launch
+            if (scanEntry.title != savedTitle) return@launch
+            renameScanTo(scanEntry, newTitle)
         }
     }
 
@@ -251,12 +275,13 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         }
         val title = titleInput.ifBlank { defaultTitle() }
         scope.launch {
-            val errorText = saveScan(context, file, title, dao)
+            val outcome = saveScan(context, file, title, dao)
             showSaveDialog = false
-            if (errorText == null) {
+            if (outcome.error == null) {
                 pendingCaptureFile = null
+                autoTitleScan(outcome.fileName, outcome.title)
             } else {
-                saveErrorDetail = errorText
+                saveErrorDetail = outcome.error
             }
         }
     }
@@ -583,13 +608,13 @@ private fun defaultTitle(): String =
 private fun formatDate(millis: Long): String =
     SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date(millis))
 
-// Liefert null zurück, wenn das Speichern klappte; sonst eine Klartext-Ursache für den Dialog.
+// Liefert bei Erfolg Dateinamen und Titel des neuen Scans zurück; sonst eine Klartext-Ursache.
 private suspend fun saveScan(
     context: Context,
     photoFile: File,
     title: String,
     dao: ScanDao
-): String? = withContext(Dispatchers.IO) {
+): SaveOutcome = withContext(Dispatchers.IO) {
     try {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         var readable = false
@@ -646,11 +671,18 @@ private suspend fun saveScan(
             )
         )
         photoFile.delete()
-        null
+        SaveOutcome(null, fileName, title)
     } catch (e: Exception) {
-        "Fehler: " + (e.message ?: e.javaClass.simpleName)
+        SaveOutcome("Fehler: " + (e.message ?: e.javaClass.simpleName))
     }
 }
+
+/** Ergebnis eines Speicherns: Fehlerklartext oder Dateiname und Titel des neuen Scans. */
+private data class SaveOutcome(
+    val error: String?,
+    val fileName: String? = null,
+    val title: String? = null
+)
 
 // JPEGs tragen die Drehung in den EXIF-Daten; BitmapFactory ignoriert sie, wir nicht.
 private fun applyExifRotation(path: String, bitmap: Bitmap): Bitmap {

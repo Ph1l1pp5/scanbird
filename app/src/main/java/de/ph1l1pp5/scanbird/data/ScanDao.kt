@@ -15,6 +15,9 @@ interface ScanDao {
     @Insert
     suspend fun insert(scan: ScanEntity): Long
 
+    @Query("SELECT * FROM scans WHERE pdfFileName = :fileName LIMIT 1")
+    suspend fun findByFile(fileName: String): ScanEntity?
+
     @Update
     suspend fun update(scan: ScanEntity)
 
