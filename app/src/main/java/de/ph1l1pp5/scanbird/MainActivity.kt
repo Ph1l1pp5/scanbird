@@ -149,7 +149,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
     fun applyRename(scan: ScanEntity, newTitle: String) {
         scope.launch {
             val renamed = withContext(Dispatchers.IO) {
-                val safeTitle = newTitle.replace(Regex("[^\p{L}\p{N} ._-]"), "_")
+                val safeTitle = newTitle.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
                 // Zeitstempel-Präfix bleibt — Sortierung läuft weiter über den Zeitstempel.
                 val prefix = scan.pdfFileName
                     .removeSuffix(".pdf")
@@ -502,7 +502,7 @@ private suspend fun saveScan(
 
         val upright = applyExifRotation(photoFile.absolutePath, rawBitmap)
 
-        val safeFileTitle = title.replace(Regex("[^\p{L}\p{N} ._-]"), "_")
+        val safeFileTitle = title.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
         val fileName = System.currentTimeMillis().toString() + "_" + safeFileTitle + ".pdf"
 
         val page = DocumentFinder.extractPage(upright)
