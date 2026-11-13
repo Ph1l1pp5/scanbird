@@ -136,6 +136,53 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         try { BackupStore.ensureBackedUp(context, dao) } catch (e: Exception) { }
     }
 
+    // Simplicity-Regel (0.5.2): Niemand soll die Backup-Einrichtung in den
+    // Einstellungen suchen muessen. Die App fragt genau dann nach, wenn zum
+    // ersten Mal ein Scan im Verlauf liegt — ein Tap auf „Nein danke" beendet
+    // die Nachfrage fuer immer, die Einstellungen bleiben trotzdem moeglich.
+    var showBackupPrompt by remember { mutableStateOf(false) }
+    val backupPromptPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = result.data?.data
+        if (uri != null && result.resultCode == android.app.Activity.RESULT_OK) {
+            BackupStore.saveTarget(context, uri)
+            // Ziel frisch gewaehlt: den ganzen Rueckstand sofort still nachziehen.
+            scope.launch {
+                try { BackupStore.ensureBackedUp(context, dao) } catch (e: Exception) { }
+            }
+        }
+        showBackupPrompt = false
+    }
+    LaunchedEffect(scans) {
+        if (scans.isNotEmpty() &&
+            !settings.backupPromptDeclined &&
+            settings.backupTreeUri == null
+        ) {
+            showBackupPrompt = true
+        }
+    }
+
+    if (showBackupPrompt) {
+        AlertDialog(
+            onDismissRequest = { showBackupPrompt = false },
+            title = { Text(stringResource(R.string.backup_prompt_title)) },
+            text = { Text(stringResource(R.string.backup_prompt_text)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showBackupPrompt = false
+                    backupPromptPicker.launch(BackupStore.pickFolderIntent())
+                }) { Text(stringResource(R.string.backup_prompt_choose)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    settings.backupPromptDeclined = true
+                    showBackupPrompt = false
+                }) { Text(stringResource(R.string.backup_prompt_decline)) }
+            }
+        )
+    }
+
     var showScanner by remember { mutableStateOf(false) }
     var viewScan by remember { mutableStateOf<ScanEntity?>(null) }
     var pendingPages by remember { mutableStateOf(emptyList<File>()) }

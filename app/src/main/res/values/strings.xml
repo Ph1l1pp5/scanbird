@@ -53,6 +53,10 @@
     <string name="choose_backup_folder">Zielordner wählen</string>
     <string name="backup_hint">Tipp: Im Auswahldialog oben links auf das Menü (☰) tippen — dort erscheinen die installierten Cloud-Apps wie kDrive. Dann in den gewünschten Ordner navigieren und „Verwenden“ tippen. Den Speicher-Hauptordner selbst kann man nicht wählen — immer einen Ordner darin.</string>
     <string name="remove_backup_target">Ziel entfernen</string>
+    <string name="backup_prompt_title">Scans in die Cloud sichern?</string>
+    <string name="backup_prompt_text">Fertige PDFs können automatisch in einen Cloud-Ordner kopiert werden (z. B. kDrive) — einmal einrichten, danach läuft alles von selbst. Im folgenden Dialog oben links das Menü (☰) öffnen und dort die Cloud-App wählen, dann den Ordner antippen.</string>
+    <string name="backup_prompt_choose">Cloud-Ordner wählen</string>
+    <string name="backup_prompt_decline">Nein danke</string>
     <string name="cloud_storage">Cloud-Speicher</string>
     <string name="cloud_cleanup">Cloud-Speicher aufräumen</string>
     <string name="cloud_no_target">Kein Backup-Zielordner gewählt — erst in den Backup-Einstellungen einrichten.</string>
