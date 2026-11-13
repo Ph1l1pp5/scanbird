@@ -419,7 +419,11 @@ private fun CameraContent(
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             ) {
                 Text(
-                    (pages.size + 1).toString(),
+                    // Zaehlt erst weiter, wenn die aufgenommene Seite mit
+                    // „Weiter scannen“ bestaetigt wurde — waehrend der
+                    // Rueckfrage hinter dem Speichern-Dialog bleibt die
+                    // alte Zahl stehen (Philipps Wunsch, 0.5.3).
+                    (if (paused && pages.isNotEmpty()) pages.size else pages.size + 1).toString(),
                     color = Color(0xFF00FFFF),
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontWeight = FontWeight.Bold,

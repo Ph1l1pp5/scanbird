@@ -14,6 +14,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -37,7 +38,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -104,6 +104,9 @@ class MainActivity : ComponentActivity() {
 
 private enum class Screen { Verlauf, Einstellungen, CloudSpeicher }
 
+/** Signatur-Rahmen (0.5.3): Knöpfe im Pillen-Look — Neon-Cyan-Rand wie im Verlauf. */
+private val NeonCyanBorder = BorderStroke(2.dp, Color(0xFF00FFFF).copy(alpha = 0.55f))
+
 @Composable
 fun ScanbirdApp() {
     var screen by remember { mutableStateOf(Screen.Verlauf) }
@@ -136,52 +139,6 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         try { BackupStore.ensureBackedUp(context, dao) } catch (e: Exception) { }
     }
 
-    // Simplicity-Regel (0.5.2): Niemand soll die Backup-Einrichtung in den
-    // Einstellungen suchen muessen. Die App fragt genau dann nach, wenn zum
-    // ersten Mal ein Scan im Verlauf liegt — ein Tap auf „Nein danke" beendet
-    // die Nachfrage fuer immer, die Einstellungen bleiben trotzdem moeglich.
-    var showBackupPrompt by remember { mutableStateOf(false) }
-    val backupPromptPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val uri = result.data?.data
-        if (uri != null && result.resultCode == android.app.Activity.RESULT_OK) {
-            BackupStore.saveTarget(context, uri)
-            // Ziel frisch gewaehlt: den ganzen Rueckstand sofort still nachziehen.
-            scope.launch {
-                try { BackupStore.ensureBackedUp(context, dao) } catch (e: Exception) { }
-            }
-        }
-        showBackupPrompt = false
-    }
-    LaunchedEffect(scans) {
-        if (scans.isNotEmpty() &&
-            !settings.backupPromptDeclined &&
-            settings.backupTreeUri == null
-        ) {
-            showBackupPrompt = true
-        }
-    }
-
-    if (showBackupPrompt) {
-        AlertDialog(
-            onDismissRequest = { showBackupPrompt = false },
-            title = { Text(stringResource(R.string.backup_prompt_title)) },
-            text = { Text(stringResource(R.string.backup_prompt_text)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showBackupPrompt = false
-                    backupPromptPicker.launch(BackupStore.pickFolderIntent())
-                }) { Text(stringResource(R.string.backup_prompt_choose)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    settings.backupPromptDeclined = true
-                    showBackupPrompt = false
-                }) { Text(stringResource(R.string.backup_prompt_decline)) }
-            }
-        )
-    }
 
     var showScanner by remember { mutableStateOf(false) }
     var viewScan by remember { mutableStateOf<ScanEntity?>(null) }
@@ -802,7 +759,10 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) }) {
+                OutlinedButton(
+                    onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) },
+                    border = NeonCyanBorder
+                ) {
                     Text(stringResource(R.string.choose_backup_folder))
                 }
                 Spacer(Modifier.height(8.dp))
@@ -821,12 +781,16 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onOpenCleanup) {
+                OutlinedButton(onClick = onOpenCleanup, border = NeonCyanBorder) {
                     Text(stringResource(R.string.cloud_cleanup))
                 }
                 if (restorable > 0) {
                     Spacer(Modifier.height(8.dp))
-                    Button(onClick = { runRestore() }, enabled = !restoring) {
+                    OutlinedButton(
+                        onClick = { runRestore() },
+                        enabled = !restoring,
+                        border = NeonCyanBorder
+                    ) {
                         Text(stringResource(R.string.restore_button))
                     }
                 }
@@ -836,14 +800,20 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) }) {
+                OutlinedButton(
+                    onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) },
+                    border = NeonCyanBorder
+                ) {
                     Text(stringResource(R.string.choose_backup_folder))
                 }
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = {
-                    BackupStore.clearTarget(context)
-                    backupTarget = null
-                }) {
+                OutlinedButton(
+                    onClick = {
+                        BackupStore.clearTarget(context)
+                        backupTarget = null
+                    },
+                    border = NeonCyanBorder
+                ) {
                     Text(stringResource(R.string.remove_backup_target))
                 }
             }
