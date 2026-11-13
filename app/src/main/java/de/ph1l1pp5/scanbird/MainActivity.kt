@@ -12,7 +12,6 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -424,8 +423,9 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
                     var menuOpen by remember { mutableStateOf(false) }
                     val isSelected = scan.id in selectedIds
                     Box {
-                        // Verlaufs-Pille im AutoSnap-Stil: sehr breit, dunkler Grund,
-                        // Neon-Cyan-Rand — Titel und Datum sitzen drin.
+                        // Verlaufs-Pille im AutoSnap-Stil: volle Breite, Neon-Cyan-Rand,
+                        // Innenleben in Hintergrundfarbe, rechteckig mit runden Ecken —
+                        // so bekommt der Inhalt mehr Platz als in einer Rundpille.
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -441,13 +441,12 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
                                     },
                                     onLongClick = { if (!selectionMode) menuOpen = true }
                                 )
-                                .background(Color(0x99000000), RoundedCornerShape(999.dp))
                                 .border(
                                     width = 2.dp,
                                     color = Color(0xFF00FFFF).copy(alpha = 0.55f),
-                                    shape = RoundedCornerShape(999.dp)
+                                    shape = RoundedCornerShape(20.dp)
                                 )
-                                .padding(horizontal = 20.dp, vertical = 14.dp),
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (selectionMode) {
@@ -462,12 +461,11 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     scan.title,
-                                    color = Color.White,
                                     style = MaterialTheme.typography.bodyLarge
                                 )
                                 Text(
                                     formatDate(scan.createdAt),
-                                    color = Color.White.copy(alpha = 0.6f),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -475,8 +473,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
                                 IconButton(onClick = { mailScan(scan) }) {
                                     Icon(
                                         Icons.Filled.Email,
-                                        contentDescription = stringResource(R.string.send_as_mail),
-                                        tint = Color.White
+                                        contentDescription = stringResource(R.string.send_as_mail)
                                     )
                                 }
                             }

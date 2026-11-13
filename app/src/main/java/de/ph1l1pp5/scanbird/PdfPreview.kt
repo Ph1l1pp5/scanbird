@@ -107,15 +107,14 @@ fun PdfPreviewScreen(
         }
     }
 
-    // Vollbild: Systemleisten verschwinden, kommen per Wisch-Geste an den
-    // Bildschirmrand zurueck — und die Android-Zurueck-Geste fuehrt zur Liste.
+    // Vollbild: Systemleisten verschwinden; der Wisch vom Rand ist sofort die
+    // Android-Zurueck-Geste (kein Zwischen-Einblenden) — und er fuehrt zur Liste.
     val view = LocalView.current
     DisposableEffect(Unit) {
         val window = (view.context as? Activity)?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
         window?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
-        controller?.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
         controller?.hide(WindowInsetsCompat.Type.systemBars())
         onDispose {
             controller?.show(WindowInsetsCompat.Type.systemBars())
