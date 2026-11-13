@@ -117,7 +117,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 
     var showScanner by remember { mutableStateOf(false) }
     var viewScan by remember { mutableStateOf<ScanEntity?>(null) }
-    var pendingCaptureFile by remember { mutableStateOf<File?>(null) }
+    var pendingPages by remember { mutableStateOf(emptyList<File>()) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var titleInput by remember { mutableStateOf("") }
     var saveErrorDetail by remember { mutableStateOf<String?>(null) }
@@ -256,8 +256,8 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
     if (showScanner) {
         ScanScreen(
             onClose = { showScanner = false },
-            onCapture = { file ->
-                pendingCaptureFile = file
+            onCapture = { files ->
+                pendingPages = files
                 showScanner = false
                 titleInput = defaultTitle()
                 showSaveDialog = true
@@ -267,17 +267,17 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
     }
 
     fun saveNow() {
-        val file = pendingCaptureFile
-        if (file == null) {
+        val files = pendingPages
+        if (files.isEmpty()) {
             showSaveDialog = false
             return
         }
         val title = titleInput.ifBlank { defaultTitle() }
         scope.launch {
-            val outcome = saveScan(context, file, title, dao)
+            val outcome = saveScan(context, files, title, dao)
             showSaveDialog = false
             if (outcome.error == null) {
-                pendingCaptureFile = null
+                pendingPages = emptyList()
                 autoTitleScan(outcome.fileName, outcome.title)
             } else {
                 saveErrorDetail = outcome.error
@@ -446,12 +446,21 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             onDismissRequest = { showSaveDialog = false },
             title = { Text(stringResource(R.string.save_title)) },
             text = {
-                OutlinedTextField(
-                    value = titleInput,
-                    onValueChange = { titleInput = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column {
+                    OutlinedTextField(
+                        value = titleInput,
+                        onValueChange = { titleInput = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (pendingPages.size > 1) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.save_dialog_pages, pendingPages.size),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = { saveNow() }) {
@@ -610,34 +619,55 @@ private fun formatDate(millis: Long): String =
 // Liefert bei Erfolg Dateinamen und Titel des neuen Scans zurück; sonst eine Klartext-Ursache.
 private suspend fun saveScan(
     context: Context,
-    photoFile: File,
+    photoFiles: List<File>,
     title: String,
     dao: ScanDao
 ): SaveOutcome = withContext(Dispatchers.IO) {
     try {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        var readable = false
-        for (attempt in 0..9) {
-            BitmapFactory.decodeFile(photoFile.absolutePath, bounds)
-            if (bounds.outWidth > 0) {
-                readable = true
-                break
+        if (photoFiles.isEmpty()) {
+            return@withContext SaveOutcome("Keine Seiten vorhanden.")
+        }
+
+        // Je Seite: dekodieren, aufrichten, Blatt finden, polieren — dann sofort
+        // als JPEG-Seite packen und das Bitmap recyceln. So liegt nie mehr als
+        // eine Seite als Pixel im Speicher, egal wie dick das Dokument wird.
+        val pages = ArrayList<PdfWriter.Page>()
+        for (photoFile in photoFiles) {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            var readable = false
+            for (attempt in 0..9) {
+                BitmapFactory.decodeFile(photoFile.absolutePath, bounds)
+                if (bounds.outWidth > 0) {
+                    readable = true
+                    break
+                }
+                delay(500)
             }
-            delay(500)
-        }
-        if (!readable) {
-            return@withContext SaveOutcome(
-                context.getString(R.string.error_photo_unreadable, photoFile.length())
-            )
-        }
+            if (!readable) {
+                return@withContext SaveOutcome(
+                    context.getString(R.string.error_photo_unreadable, photoFile.length())
+                )
+            }
 
-        var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1200) sample *= 2
-        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-        val rawBitmap = BitmapFactory.decodeFile(photoFile.absolutePath, opts)
-            ?: return@withContext SaveOutcome(context.getString(R.string.error_photo_empty))
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1200) sample *= 2
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            val rawBitmap = BitmapFactory.decodeFile(photoFile.absolutePath, opts)
+                ?: return@withContext SaveOutcome(context.getString(R.string.error_photo_empty))
 
-        val upright = applyExifRotation(photoFile.absolutePath, rawBitmap)
+            val upright = applyExifRotation(photoFile.absolutePath, rawBitmap)
+
+            val bitmap = DocumentFinder.extractPage(upright)
+            if (bitmap !== upright) {
+                upright.recycle()
+            }
+            // Flachbett-Look: Schatten, Überbelichtung und Knitter plätten,
+            // Ränder füllen, Restschiefe geraderücken — wie vom Flachbett-Scanner.
+            val polished = ScanPolish.polish(bitmap)
+            bitmap.recycle()
+            pages.add(PdfWriter.pageOf(polished))
+            polished.recycle()
+        }
 
         val safeFileTitle = fileTitle(title)
         // Kurzer, sauberer Dateiname: keine Millisekunden-Ziffernwurst, keine Leerzeichen —
@@ -645,25 +675,14 @@ private suspend fun saveScan(
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.GERMANY).format(Date())
         val fileName = "Scan_" + stamp + "__" + safeFileTitle + ".pdf"
 
-        var page = DocumentFinder.extractPage(upright)
-        if (page !== upright) {
-            upright.recycle()
-        }
-        // Flachbett-Look: Schatten, Überbelichtung und Knitter plätten,
-        // Ränder füllen, Restschiefe geraderücken — wie vom Flachbett-Scanner.
-        val polished = ScanPolish.polish(page)
-        page.recycle()
-        page = polished
-
         val target = ScanStore.createPdf(context, fileName)
         try {
-            PdfWriter.writeTo(page, target.stream)
+            PdfWriter.writeTo(pages, target.stream)
             target.finish()
         } catch (e: Exception) {
             target.abandon()
             throw e
         }
-        page.recycle()
 
         dao.insert(
             ScanEntity(
@@ -672,7 +691,9 @@ private suspend fun saveScan(
                 pdfFileName = fileName
             )
         )
-        photoFile.delete()
+        for (photoFile in photoFiles) {
+            photoFile.delete()
+        }
         SaveOutcome(null, fileName, title)
     } catch (e: Exception) {
         SaveOutcome("Fehler: " + (e.message ?: e.javaClass.simpleName))

@@ -2,6 +2,7 @@ package de.ph1l1pp5.scanbird
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
@@ -18,14 +19,18 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -64,9 +70,19 @@ import kotlinx.coroutines.delay
 @Composable
 fun ScanScreen(
     onClose: () -> Unit,
-    onCapture: (File) -> Unit
+    onCapture: (List<File>) -> Unit
 ) {
     val context = LocalContext.current
+    var pages by remember { mutableStateOf(listOf<File>()) }
+    var discardConfirm by remember { mutableStateOf(false) }
+
+    // Zurueck-Knopf mit gepufferten Seiten: erst nachfragen, sonst wandern vier
+    // Seiten Arbeit mit einem Fehlipp ins Nirwana.
+    BackHandler(enabled = pages.isNotEmpty()) { discardConfirm = true }
+
+    fun requestClose() {
+        if (pages.isEmpty()) onClose() else discardConfirm = true
+    }
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
@@ -88,7 +104,15 @@ fun ScanScreen(
             .background(Color.Black)
     ) {
         if (hasPermission) {
-            CameraContent(onCapture = onCapture)
+            CameraContent(
+                pages = pages,
+                onPageCaptured = { file -> pages = pages + file },
+                onRemoveLast = {
+                    pages.lastOrNull()?.delete()
+                    pages = pages.dropLast(1)
+                },
+                onFinish = onCapture
+            )
         } else {
             Text(
                 stringResource(R.string.scan_no_permission),
@@ -101,7 +125,7 @@ fun ScanScreen(
             )
         }
         IconButton(
-            onClick = onClose,
+            onClick = { requestClose() },
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(12.dp)
@@ -113,10 +137,44 @@ fun ScanScreen(
             )
         }
     }
+
+    // Verwerfen-Rueckfrage: X oder Zurueck mit gepufferten Seiten.
+    if (discardConfirm) {
+        AlertDialog(
+            onDismissRequest = { discardConfirm = false },
+            title = { Text(stringResource(R.string.discard_pages_title)) },
+            text = { Text(stringResource(R.string.discard_pages_text)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    discardConfirm = false
+                    for (page in pages) {
+                        try {
+                            page.delete()
+                        } catch (e: Exception) {
+                        }
+                    }
+                    pages = emptyList()
+                    onClose()
+                }) {
+                    Text(stringResource(R.string.discard_scan))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { discardConfirm = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
 }
 
 @Composable
-private fun CameraContent(onCapture: (File) -> Unit) {
+private fun CameraContent(
+    pages: List<File>,
+    onPageCaptured: (File) -> Unit,
+    onRemoveLast: () -> Unit,
+    onFinish: (List<File>) -> Unit
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
@@ -169,12 +227,9 @@ private fun CameraContent(onCapture: (File) -> Unit) {
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(results: ImageCapture.OutputFileResults) {
                     capturing.set(false)
-                    // Blitz sofort aus — das Licht stirbt mit dem Auslöser, nicht erst später.
-                    try {
-                        camera?.cameraControl?.enableTorch(false)
-                    } catch (e: Exception) {
-                    }
-                    onCapture(file)
+                    // Batch-Modus: Blitz bleibt an und die Kamera offen — die naechste
+                    // Seite wird gelegt, ohne dass das Licht ausgeht.
+                    onPageCaptured(file)
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -333,6 +388,54 @@ private fun CameraContent(onCapture: (File) -> Unit) {
                     .background(Color.White, CircleShape)
             )
         }
+
+        // Seiten-Puffer: Zaehler-Chip oben mittig, daneben Undo fuer die letzte Seite.
+        if (pages.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .background(Color(0x99000000), RoundedCornerShape(999.dp))
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        pluralStringResource(R.plurals.pages_buffered, pages.size, pages.size),
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                IconButton(onClick = onRemoveLast) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = stringResource(R.string.undo_last_page),
+                        tint = Color.White
+                    )
+                }
+            }
+
+            // Fertig-Knopf: schliesst den Batch ab — alle Seiten wandern als
+            // ein PDF in den Speichern-Dialog.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 24.dp, bottom = 32.dp)
+                    .size(64.dp)
+                    .background(Color(0xFF2E7D32), CircleShape)
+                    .clickable { onFinish(pages) },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = stringResource(R.string.finish_scan),
+                    tint = Color.White
+                )
+            }
+        }
     }
 
     if (cameraError) {
@@ -360,6 +463,9 @@ private class SteadyAnalyzer(
 
     private var previous: FloatArray? = null
     private var steadyFrames = 0
+    // True, seit zuletzt Bewegung im Bild war (oder im frischen Start): nur dann
+    // darf der AutoSnap feuern — nach einem Snap wartet er auf den Blattwechsel.
+    private var sawMotion = true
 
     override fun analyze(image: ImageProxy) {
         try {
@@ -394,12 +500,19 @@ private class SteadyAnalyzer(
                     steadyFrames++
                 } else {
                     steadyFrames = 0
+                    sawMotion = true
                 }
                 if (steadyFrames == STEADY_TRIGGER) {
                     steadyFrames = 0
-                    onSteady()
+                    // Nach jedem Snap muss erst wieder Bewegung rein — das Blatt
+                    // drehen zaehlt. Sonst feuert der AutoSnap im Sekundentakt
+                    // dasselbe ruhige Blatt ab.
+                    if (sawMotion) {
+                        sawMotion = false
+                        onSteady()
+                    }
                 }
-                onProgress(steadyFrames / STEADY_TRIGGER.toFloat())
+                onProgress(if (sawMotion) steadyFrames / STEADY_TRIGGER.toFloat() else 0f)
             }
             previous = grid
         } finally {
