@@ -18,6 +18,10 @@ interface ScanDao {
     @Query("SELECT * FROM scans WHERE pdfFileName = :fileName LIMIT 1")
     suspend fun findByFile(fileName: String): ScanEntity?
 
+    /** Alle bekannten Dateinamen — Restore ueberspringt, was die App schon hat. */
+    @Query("SELECT pdfFileName FROM scans")
+    suspend fun allFileNames(): List<String>
+
     @Query("SELECT * FROM scans WHERE backedUp = 0 ORDER BY createdAt ASC")
     suspend fun findNotBackedUp(): List<ScanEntity>
 

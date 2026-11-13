@@ -16,9 +16,12 @@ import java.io.FileInputStream
  * ohne Account, ohne Internet-Berechtigung; die App kennt den Anbieter nicht.
  * Wechselt der Anbieter, wechselt nur der gewaehlte Ordner.
  *
- * Der Zielordner bleibt FLACH: alle PDFs liegen direkt drin, der Titel steckt
- * im Dateinamen. listChildren liefert die Namensliste — die Grundlage fuer
- * den spaeteren Restore (Verlauf aus dem Backup rekonstruieren).
+ * Seit 0.5.2 liegt das Backup IMMER in einem festen Unterordner namens
+ * „Scanbird“ im gewaehlten Ziel (oder direkt im Ziel, wenn dieses bereits so
+ * heisst): Backup und Wiederherstellen finden sich so immer an derselben
+ * bekannten Stelle. „Aus Cloud wiederherstellen“ zieht jede PDF dieses Ordners,
+ * die die App noch nicht kennt, in den Arbeitsordner und legt Verlaufseintraege
+ * an — neues Geraet, gleiche Liste.
  *
  * Fehlverhalten ist bewusst STILL: Ist das Ziel nicht erreichbar (Cloud
  * offline, App deinstalliert), geschieht nichts — beim naechsten Scan oder
@@ -26,13 +29,17 @@ import java.io.FileInputStream
  */
 object BackupStore {
 
-    /** Eine Datei im Backup-Zielordner — Grundlage der Aufräum-Ansicht (0.5.1). */
+    /** Eine Datei im Backup-Zielordner — Grundlage der Aufräum-Ansicht. */
     data class BackupFile(
         val documentId: String,
         val name: String,
+        val mime: String,
         val size: Long,
         val lastModified: Long
     )
+
+    /** Fester Ordnername im Ziel — das Wiedererkennungszeichen des Backups. */
+    const val FOLDER_NAME = "Scanbird"
 
     /** Ordner-Picker: URI mitsamt dauerhaft haltbarer Berechtigung anfordern. */
     fun pickFolderIntent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -44,6 +51,13 @@ object BackupStore {
     }
 
     fun target(context: Context): Uri? = SettingsStore(context).backupTreeUri
+
+    /** Lesbares Ziel-Etikett fuer die Einstellungen, z. B. „kDrive/Scanbird“. */
+    fun targetLabel(context: Context): String? {
+        val uri = target(context) ?: return null
+        val name = displayName(uri)
+        return if (name == FOLDER_NAME) name else name + "/" + FOLDER_NAME
+    }
 
     /** Neues Ziel setzen: Berechtigung dauerhaft nehmen, das alte freigeben. */
     fun saveTarget(context: Context, uri: Uri) {
@@ -94,7 +108,40 @@ object BackupStore {
     }
 
     /**
-     * Rueckstand sichern: alle Scans ohne Backup-Kopie in den Zielordner
+     * Der feste Scanbird-Ordner im Ziel (0.5.2): Heisst der gewaehlte Ordner
+     * bereits „Scanbird“, wird er direkt genutzt; sonst wird ein Unterordner
+     * dieses Namens gesucht und, wenn fehlend, angelegt — so entsteht nie ein
+     * „Scanbird (1)“. Liefert dessen Dokument-ID oder null, wenn das Ziel
+     * nicht erreichbar ist.
+     */
+    fun scanbirdFolder(context: Context): String? = try {
+        val tree = target(context) ?: return null
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        if (displayName(tree) == FOLDER_NAME) {
+            rootId
+        } else {
+            val found = queryFiles(context, tree, rootId).firstOrNull {
+                it.name == FOLDER_NAME &&
+                    it.mime == DocumentsContract.Document.MIME_TYPE_DIR
+            }
+            if (found != null) {
+                found.documentId
+            } else {
+                val created = DocumentsContract.createDocument(
+                    context.contentResolver,
+                    DocumentsContract.buildDocumentUriUsingTree(tree, rootId),
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    FOLDER_NAME
+                )
+                if (created != null) DocumentsContract.getDocumentId(created) else null
+            }
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
+     * Rueckstand sichern: alle Scans ohne Backup-Kopie in den Scanbird-Ordner
      * ziehen. Kein Ziel oder lesbarer Zielordner → still ausfallen; der
      * naechste Scan oder Start versucht es wieder. Liefert true, wenn der
      * ganze Rueckstand gesichert ist.
@@ -102,9 +149,10 @@ object BackupStore {
     suspend fun ensureBackedUp(context: Context, dao: ScanDao): Boolean =
         withContext(Dispatchers.IO) {
             val tree = target(context) ?: return@withContext false
+            val folderId = scanbirdFolder(context) ?: return@withContext false
             try {
-                val existing = listChildren(context, tree)
-                    ?: return@withContext false
+                val existing = queryFiles(context, tree, folderId)
+                    .mapTo(HashSet()) { it.name }
                 for (scan in dao.findNotBackedUp()) {
                     val fileName = scan.pdfFileName
                     if (fileName in existing) {
@@ -114,7 +162,9 @@ object BackupStore {
                     val pfd = ScanStore.openRead(context, ScanStore.locate(context, fileName))
                     if (pfd == null) continue
                     val created = DocumentsContract.createDocument(
-                        context.contentResolver, tree, "application/pdf", fileName
+                        context.contentResolver,
+                        DocumentsContract.buildDocumentUriUsingTree(tree, folderId),
+                        "application/pdf", fileName
                     )
                     if (created == null) return@withContext false
                     var copyOk = false
@@ -140,35 +190,105 @@ object BackupStore {
         }
 
     /**
-     * Alte Backup-Kopie nach einer Umbenennung aus dem Ziel entfernen, falls
-     * vorhanden — so bleibt der flache Ordner frei von Rumpelkopien, und die
-     * Datei wandert beim naechsten Sicherungslauf unter ihrem neuen Namen hoch.
+     * Wiederherstellen (0.5.2): Jede PDF aus dem Scanbird-Ordner, die die App
+     * noch nicht kennt, in den Arbeitsordner kopieren und als Verlaufseintrag
+     * anlegen — neues Geraet, verbundene Cloud, gleiche Liste. Der Vermerk
+     * backedUp steht ab sofort auf wahr, die Datei ist ja schon in der Cloud.
+     * Liefert die Zahl der zurueckgeholten Scans; null bei Fehler.
+     */
+    suspend fun restoreMissing(context: Context, dao: ScanDao): Int? =
+        withContext(Dispatchers.IO) {
+            val tree = target(context) ?: return@withContext null
+            val folderId = scanbirdFolder(context) ?: return@withContext null
+            try {
+                val known = dao.allFileNames().toHashSet()
+                var restored = 0
+                for (file in queryFiles(context, tree, folderId)) {
+                    if (file.name !in known &&
+                        file.name.endsWith(".pdf", ignoreCase = true)
+                    ) {
+                        if (restoreOne(context, tree, file, dao)) restored++
+                    }
+                }
+                restored
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+    /** Zahl wiederherstellbarer PDFs — steuert, ob der Restore-Knopf erscheint. */
+    suspend fun countRestorable(context: Context, dao: ScanDao): Int =
+        withContext(Dispatchers.IO) {
+            val tree = target(context) ?: return@withContext 0
+            val folderId = scanbirdFolder(context) ?: return@withContext 0
+            try {
+                val known = dao.allFileNames().toHashSet()
+                queryFiles(context, tree, folderId).count {
+                    it.name !in known && it.name.endsWith(".pdf", ignoreCase = true)
+                }
+            } catch (e: Exception) {
+                0
+            }
+        }
+
+    /** Eine Cloud-PDF in den Arbeitsordner ziehen und eintragen. */
+    private fun restoreOne(
+        context: Context,
+        tree: Uri,
+        file: BackupFile,
+        dao: ScanDao
+    ): Boolean {
+        val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, file.documentId)
+        val targetPdf = try {
+            ScanStore.createPdf(context, file.name)
+        } catch (e: Exception) {
+            return false
+        }
+        var ok = false
+        try {
+            context.contentResolver.openInputStream(docUri)?.use { input ->
+                targetPdf.stream.use { input.copyTo(it) }
+            }
+            ok = true
+        } catch (e: Exception) {
+        }
+        if (!ok) {
+            try { targetPdf.abandon() } catch (e: Exception) { }
+            return false
+        }
+        try { targetPdf.finish() } catch (e: Exception) { }
+        dao.insert(
+            ScanEntity(
+                title = titleFromFileName(file.name),
+                createdAt = if (file.lastModified > 0) {
+                    file.lastModified
+                } else {
+                    System.currentTimeMillis()
+                },
+                pdfFileName = file.name,
+                backedUp = true
+            )
+        )
+        return true
+    }
+
+    /**
+     * Alte Backup-Kopie nach einer Umbenennung aus dem Scanbird-Ordner
+     * entfernen, falls vorhanden — so bleibt der Ordner frei von Rumpelkopien,
+     * und die Datei wandert beim naechsten Sicherungslauf unter ihrem neuen
+     * Namen hoch.
      */
     fun removeBackupName(context: Context, fileName: String) {
         val tree = target(context) ?: return
+        val folderId = scanbirdFolder(context) ?: return
         try {
-            val root = DocumentsContract.getTreeDocumentId(tree)
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, root)
-            context.contentResolver.query(
-                childrenUri,
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
-                ),
-                null, null, null
-            )?.use { c ->
-                val idCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val nameCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                if (idCol >= 0 && nameCol >= 0) {
-                    while (c.moveToNext()) {
-                        if (c.getString(nameCol) == fileName) {
-                            val docUri = DocumentsContract.buildDocumentUriUsingTree(
-                                tree, c.getString(idCol)
-                            )
-                            try { context.contentResolver.delete(docUri, null, null) } catch (e: Exception) { }
-                            break
-                        }
-                    }
+            for (child in queryFiles(context, tree, folderId)) {
+                if (child.name == fileName) {
+                    val docUri = DocumentsContract.buildDocumentUriUsingTree(
+                        tree, child.documentId
+                    )
+                    try { context.contentResolver.delete(docUri, null, null) } catch (e: Exception) { }
+                    break
                 }
             }
         } catch (e: Exception) {
@@ -176,22 +296,24 @@ object BackupStore {
     }
 
     /**
-     * Alle Dateien im Zielordner, neueste zuerst — die Aufräum-Ansicht in den
-     * Einstellungen. Liefert null ohne Ziel oder bei Lesefehler, eine leere
-     * Liste bei leerem Ordner.
+     * Alle Dateien im Scanbird-Ordner, neueste zuerst — die Aufräum-Ansicht in
+     * den Einstellungen. Liefert null ohne Ziel oder bei Lesefehler, eine
+     * leere Liste bei leerem Ordner.
      */
     fun listBackupFiles(context: Context): List<BackupFile>? = try {
         val tree = target(context) ?: return null
-        queryFiles(context, tree)
+        val folderId = scanbirdFolder(context) ?: return null
+        queryFiles(context, tree, folderId)
     } catch (e: Exception) {
         null
     }
 
     /**
-     * Dateien im Zielordner loeschen (Cloud-Aufräumen). Das Backup ist danach
-     * bewusst weg: Aufräumen heisst NICHT beim naechsten Lauf wieder hochladen —
-     * der backedUp-Vermerk in der Datenbank bleibt unberuehrt. Die Scans auf
-     * dem Geraet bleiben immer erhalten. Liefert die Zahl der geloeschten Dateien.
+     * Dateien im Scanbird-Ordner loeschen (Cloud-Aufräumen). Das Backup ist
+     * danach bewusst weg: Aufräumen heisst NICHT beim naechsten Lauf wieder
+     * hochladen — der backedUp-Vermerk in der Datenbank bleibt unberuehrt.
+     * Die Scans auf dem Geraet bleiben immer erhalten. Liefert die Zahl der
+     * geloeschten Dateien.
      */
     fun deleteBackupFiles(context: Context, documentIds: List<String>): Int {
         val tree = target(context) ?: return 0
@@ -206,23 +328,57 @@ object BackupStore {
         return deleted
     }
 
-    /** Namen aller Dateien im Zielordner — Restore-Grundlage fuer spaeter. */
-    private fun listChildren(context: Context, tree: Uri): HashSet<String>? = try {
-        queryFiles(context, tree).mapTo(HashSet()) { it.name }
-    } catch (e: Exception) {
-        null
+    /**
+     * Umbenennen in der Cloud (Aufräum-Ansicht). Liefert den neuen Namen oder
+     * null, wenn der Anbieter das Umbenennen nicht unterstuetzt oder es
+     * misslingt.
+     */
+    fun renameBackupFile(
+        context: Context,
+        documentId: String,
+        newFileName: String
+    ): String? {
+        val tree = target(context) ?: return null
+        return try {
+            val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, documentId)
+            val renamed = DocumentsContract.renameDocument(
+                context.contentResolver, docUri, newFileName
+            )
+            if (renamed != null) newFileName else null
+        } catch (e: Exception) {
+            null
+        }
     }
 
-    /** Zielordner abfragen: alle Dokumente mit Name, Groesse, Aenderungsdatum. */
-    private fun queryFiles(context: Context, tree: Uri): List<BackupFile> {
-        val root = DocumentsContract.getTreeDocumentId(tree)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, root)
+    /**
+     * Anzeige-Titel aus dem Backup-Dateinamen: Zeitstempel-Präfix abtrennen,
+     * Unterstriche zu Leerzeichen machen — so sieht die Cloud-Liste aus wie
+     * der Verlauf.
+     */
+    fun titleFromFileName(name: String): String {
+        val base = name.removeSuffix(".pdf")
+        val tail = if (base.contains("__")) base.substringAfter("__") else base
+        val title = tail.replace('_', ' ').trim()
+        return if (title.isBlank()) name else title
+    }
+
+    /** Kinder eines Ordners im Ziel: alle Dokumente mit Name, Typ, Groesse,
+     *  Aenderungsdatum — neueste zuerst. */
+    private fun queryFiles(
+        context: Context,
+        tree: Uri,
+        parentDocId: String
+    ): List<BackupFile> {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+            tree, parentDocId
+        )
         val result = ArrayList<BackupFile>()
         context.contentResolver.query(
             childrenUri,
             arrayOf(
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
                 DocumentsContract.Document.COLUMN_SIZE,
                 DocumentsContract.Document.COLUMN_LAST_MODIFIED
             ),
@@ -230,6 +386,7 @@ object BackupStore {
         )?.use { c ->
             val idCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
             val nameCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
             val sizeCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
             val modCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
             if (idCol >= 0 && nameCol >= 0) {
@@ -238,6 +395,7 @@ object BackupStore {
                         BackupFile(
                             documentId = c.getString(idCol) ?: continue,
                             name = c.getString(nameCol) ?: "",
+                            mime = if (mimeCol >= 0) c.getString(mimeCol) ?: "" else "",
                             size = if (sizeCol >= 0) c.getLong(sizeCol) else 0L,
                             lastModified = if (modCol >= 0) c.getLong(modCol) else 0L
                         )

@@ -698,6 +698,16 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
     var text by remember { mutableStateOf(settings.standardText) }
     var backupTarget by remember { mutableStateOf(settings.backupTreeUri) }
 
+    // Restore-Knopf nur zeigen, wenn der verbundene Scanbird-Ordner PDFs
+    // enthaelt, die die App noch nicht kennt — sonst verwirrt er nur (0.5.2).
+    var restorable by remember { mutableStateOf(0) }
+    var restoring by remember { mutableStateOf(false) }
+
+    LaunchedEffect(backupTarget) {
+        restorable = if (backupTarget == null) 0
+        else BackupStore.countRestorable(context, dao)
+    }
+
     // Zielordner-Picker: StartActivityForResult statt OpenDocumentTree-Contract,
     // denn nur der Intent aus BackupStore nimmt die persist-Berechtigung mit —
     // ohne sie waere der Zugriff nach dem App-Neustart weg.
@@ -712,6 +722,25 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
             scope.launch {
                 try { BackupStore.ensureBackedUp(context, dao) } catch (e: Exception) { }
             }
+        }
+    }
+
+    /** Aus der Cloud wiederherstellen (0.5.2): Scanbird-Ordner in den
+     *  Arbeitsordner ziehen, Verlaufseintraege anlegen. Still im Hintergrund. */
+    fun runRestore() {
+        if (restoring) return
+        restoring = true
+        scope.launch {
+            val count = BackupStore.restoreMissing(context, dao)
+            restorable = if (backupTarget == null) 0
+            else BackupStore.countRestorable(context, dao)
+            restoring = false
+            val msg = if (count == null) {
+                context.getString(R.string.cloud_restore_failed)
+            } else {
+                context.getString(R.string.cloud_restored, count)
+            }
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -766,27 +795,49 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
             )
             Spacer(Modifier.height(12.dp))
             val target = backupTarget
-            Text(
-                if (target != null) {
-                    stringResource(R.string.backup_target_set, BackupStore.displayName(target))
-                } else {
-                    stringResource(R.string.backup_target_missing)
-                },
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) }) {
-                Text(stringResource(R.string.choose_backup_folder))
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                stringResource(R.string.backup_hint),
-                style = MaterialTheme.typography.bodySmall
-            )
-            if (backupTarget != null) {
+            if (target == null) {
+                // Noch kein Ziel: Rezept und Knopf stehen obenauf.
+                Text(
+                    stringResource(R.string.backup_target_missing),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) }) {
+                    Text(stringResource(R.string.choose_backup_folder))
+                }
                 Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.backup_hint),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            } else {
+                // Ziel steht: Aufräumen und Restore obenauf, Rezept und
+                // Wechsel-Knopf darunter — weniger wichtig, aber erreichbar.
+                Text(
+                    stringResource(
+                        R.string.backup_target_set,
+                        BackupStore.targetLabel(context) ?: BackupStore.displayName(target)
+                    ),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(12.dp))
                 OutlinedButton(onClick = onOpenCleanup) {
                     Text(stringResource(R.string.cloud_cleanup))
+                }
+                if (restorable > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = { runRestore() }, enabled = !restoring) {
+                        Text(stringResource(R.string.restore_button))
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    stringResource(R.string.backup_hint),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) }) {
+                    Text(stringResource(R.string.choose_backup_folder))
                 }
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = {
@@ -801,195 +852,347 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
 }
 
 /**
- * Cloud-Aufräumen (0.5.1): Der Zielordner von außen betrachtet — Dateien aus
- * der Cloud ankreuzen und gezielt löschen, ohne die Scans auf dem Gerät zu
- * berühren. Aufgeräumte Dateien werden bewusst NICHT wieder hochgeladen.
+ * Cloud-Speicher (0.5.2): Der Scanbird-Ordner in der Cloud im Verlaufs-Look —
+ * dunkle Pillen mit Neon-Rand, langes Drücken öffnet das bekannte Menü mit
+ * Auswählen, Umbenennen, Löschen. Umbenennen zieht lokale Kopie und Verlauf
+ * mit; Löschen trifft nur die Cloud — die Scans auf dem Gerät bleiben, und
+ * Aufgeräumtes lädt bewusst nicht wieder hoch.
  */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun CloudCleanupScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val dao = remember { AppDatabase.get(context).scanDao() }
     val scope = rememberCoroutineScope()
     var backupTarget by remember { mutableStateOf(SettingsStore(context).backupTreeUri) }
     var files by remember { mutableStateOf<List<BackupStore.BackupFile>?>(null) }
-    var selected by remember { mutableStateOf(setOf<String>()) }
-    var confirmDelete by remember { mutableStateOf(false) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    var fileForRename by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
+    var fileForDelete by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
+    var confirmDeleteMany by remember { mutableStateOf(false) }
     var reloadTick by remember { mutableStateOf(0) }
 
-    // Ordnerinhalt frisch laden: beim Betreten und nach jedem Löschen.
+    // Ordnerinhalt frisch laden: beim Betreten und nach jeder Änderung.
     LaunchedEffect(backupTarget, reloadTick) {
         if (backupTarget == null) {
             files = null
         } else {
             files = withContext(Dispatchers.IO) { BackupStore.listBackupFiles(context) }
             val ids = files.orEmpty().map { it.documentId }.toSet()
-            selected = selected.intersect(ids)
+            selectedIds = selectedIds.intersect(ids)
+        }
+    }
+
+    /** Umbenennen in der Cloud: Cloud-Datei, lokale Kopie und Verlaufs-
+     *  eintrag ziehen alle mit, damit nichts auseinanderläuft. */
+    suspend fun cloudRenameTo(file: BackupStore.BackupFile, newTitle: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val safeTitle = fileTitle(newTitle)
+            if (safeTitle.isBlank()) return@withContext false
+            // Zeitstempel-Präfix bleibt, wie im Verlauf beim Umbenennen.
+            val base = file.name.removeSuffix(".pdf")
+            val prefix = if (base.contains("__")) base.substringBefore("__")
+            else base.substringBefore('_')
+            val newFileName = prefix + "__" + safeTitle + ".pdf"
+            // Erst die Cloud — misslingt sie, bleibt alles beim Alten.
+            if (BackupStore.renameBackupFile(context, file.documentId, newFileName) == null) {
+                return@withContext false
+            }
+            // Dann lokale Kopie und Verlaufseintrag hinterherziehen.
+            val scan = dao.findByFile(file.name)
+            if (scan != null) {
+                val location = ScanStore.locate(context, file.name)
+                val localExists = ScanStore.openRead(context, location)?.let { pfd ->
+                    try { pfd.close(); true } catch (e: Exception) { false }
+                } ?: false
+                if (localExists) {
+                    ScanStore.rename(context, location, newFileName)
+                }
+                dao.update(scan.copy(title = newTitle, pdfFileName = newFileName, backedUp = true))
+            }
+            true
+        }
+
+    /** Löschen in der Cloud — Mehrfachauswahl und Einzelplatz gemeinsam. */
+    fun applyDeleteCloud(ids: List<String>) {
+        scope.launch {
+            val count = withContext(Dispatchers.IO) {
+                BackupStore.deleteBackupFiles(context, ids)
+            }
+            selectedIds = emptySet()
+            selectionMode = false
+            reloadTick++
+            Toast.makeText(
+                context,
+                context.getString(R.string.cloud_deleted, count),
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.cloud_storage)) },
+                title = {
+                    Text(
+                        if (selectionMode) {
+                            stringResource(R.string.selected_count, selectedIds.size)
+                        } else {
+                            stringResource(R.string.cloud_storage)
+                        }
+                    )
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        if (selectionMode) {
+                            selectionMode = false
+                            selectedIds = emptySet()
+                        } else {
+                            onBack()
+                        }
+                    }) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.back)
                         )
                     }
+                },
+                actions = {
+                    if (selectionMode) {
+                        IconButton(
+                            onClick = { confirmDeleteMany = true },
+                            enabled = selectedIds.isNotEmpty()
+                        ) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = stringResource(R.string.delete_scan)
+                            )
+                        }
+                    }
                 }
             )
         }
     ) { padding ->
+        val list = files
         if (backupTarget == null) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.Center
+                    .padding(padding),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
                     stringResource(R.string.cloud_no_target),
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.padding(horizontal = 32.dp)
                 )
             }
-        } else {
+        } else if (list == null) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .padding(16.dp)
+                    .padding(padding),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                val list = files
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        stringResource(R.string.cloud_file_count, list?.size ?: 0),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (!list.isNullOrEmpty()) {
-                        TextButton(onClick = {
-                            selected = if (selected.size == list.size) {
-                                emptySet()
-                            } else {
-                                list.map { it.documentId }.toSet()
-                            }
-                        }) {
-                            Text(
-                                stringResource(
-                                    if (selected.size == list.size) {
-                                        R.string.cloud_select_none
-                                    } else {
-                                        R.string.cloud_select_all
-                                    }
-                                )
-                            )
-                        }
-                    }
-                }
-
-                when {
-                    list == null -> Text(
-                        stringResource(R.string.pdf_loading),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    list.isEmpty() -> Text(
-                        stringResource(R.string.cloud_empty),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    else -> LazyColumn(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    ) {
-                        items(list, key = { it.documentId }) { file ->
-                            val checked = file.documentId in selected
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .combinedClickable(
-                                        onClick = {
-                                            selected = if (checked) {
-                                                selected - file.documentId
+                Text(
+                    stringResource(R.string.pdf_loading),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        } else if (list.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    stringResource(R.string.cloud_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 32.dp)
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                items(list, key = { it.documentId }) { file ->
+                    var menuOpen by remember { mutableStateOf(false) }
+                    val isSelected = file.documentId in selectedIds
+                    Box {
+                        // Pille im Verlaufs-Stil: gleiche Optik, gleiche Gesten —
+                        // nur dass diese Liste in der Cloud lebt.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                                .combinedClickable(
+                                    onClick = {
+                                        if (selectionMode) {
+                                            selectedIds = if (isSelected) {
+                                                selectedIds - file.documentId
                                             } else {
-                                                selected + file.documentId
+                                                selectedIds + file.documentId
                                             }
-                                        },
-                                        onLongClick = { }
-                                    )
-                                    .padding(vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                                        }
+                                    },
+                                    onLongClick = { if (!selectionMode) menuOpen = true }
+                                )
+                                .border(
+                                    width = 2.dp,
+                                    color = Color(0xFF00FFFF).copy(alpha = 0.55f),
+                                    shape = RoundedCornerShape(20.dp)
+                                )
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (selectionMode) {
                                 Checkbox(
-                                    checked = checked,
+                                    checked = isSelected,
                                     onCheckedChange = {
-                                        selected = if (checked) {
-                                            selected - file.documentId
+                                        selectedIds = if (isSelected) {
+                                            selectedIds - file.documentId
                                         } else {
-                                            selected + file.documentId
+                                            selectedIds + file.documentId
                                         }
                                     }
                                 )
-                                Column {
-                                    Text(
-                                        file.name,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Text(
-                                        formatDate(file.lastModified) + " · " +
-                                            formatSize(file.size),
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    BackupStore.titleFromFileName(file.name),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    formatDate(file.lastModified) + " · " +
+                                        formatSize(file.size),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                             }
                         }
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.select)) },
+                                onClick = {
+                                    menuOpen = false
+                                    selectionMode = true
+                                    selectedIds = setOf(file.documentId)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.rename)) },
+                                onClick = {
+                                    menuOpen = false
+                                    fileForRename = file
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.delete_scan)) },
+                                onClick = {
+                                    menuOpen = false
+                                    fileForDelete = file
+                                }
+                            )
+                        }
                     }
-                }
-
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = { confirmDelete = true },
-                    enabled = selected.isNotEmpty(),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(R.string.delete_scan))
                 }
             }
         }
     }
 
-    if (confirmDelete) {
+    val fileToRename = fileForRename
+    if (fileToRename != null) {
+        var renameInput by remember {
+            mutableStateOf(BackupStore.titleFromFileName(fileToRename.name))
+        }
         AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text(stringResource(R.string.cloud_delete_title)) },
-            text = { Text(stringResource(R.string.cloud_delete_text, selected.size)) },
+            onDismissRequest = { fileForRename = null },
+            title = { Text(stringResource(R.string.save_title)) },
+            text = {
+                OutlinedTextField(
+                    value = renameInput,
+                    onValueChange = { renameInput = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    confirmDelete = false
-                    val toDelete = selected.toList()
+                    val newTitle = renameInput.trim()
+                        .ifBlank { BackupStore.titleFromFileName(fileToRename.name) }
+                    fileForRename = null
                     scope.launch {
-                        val count = withContext(Dispatchers.IO) {
-                            BackupStore.deleteBackupFiles(context, toDelete)
+                        val ok = cloudRenameTo(fileToRename, newTitle)
+                        if (!ok) {
+                            Toast.makeText(
+                                context,
+                                R.string.cloud_rename_failed,
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
-                        selected = emptySet()
                         reloadTick++
-                        Toast.makeText(
-                            context,
-                            context.getString(R.string.cloud_deleted, count),
-                            Toast.LENGTH_SHORT
-                        ).show()
                     }
-                }) { Text(stringResource(R.string.delete_scan)) }
+                }) {
+                    Text(stringResource(R.string.save))
+                }
             },
             dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) {
+                TextButton(onClick = { fileForRename = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    val fileToDelete = fileForDelete
+    if (fileToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { fileForDelete = null },
+            title = { Text(stringResource(R.string.cloud_delete_title)) },
+            text = { Text(stringResource(R.string.cloud_delete_text)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    fileForDelete = null
+                    applyDeleteCloud(listOf(fileToDelete.documentId))
+                }) {
+                    Text(stringResource(R.string.delete_scan))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { fileForDelete = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    if (confirmDeleteMany) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteMany = false },
+            title = { Text(stringResource(R.string.cloud_delete_title)) },
+            text = { Text(stringResource(R.string.cloud_delete_text)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDeleteMany = false
+                    applyDeleteCloud(selectedIds.toList())
+                }) {
+                    Text(stringResource(R.string.delete_scan))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteMany = false }) {
                     Text(stringResource(R.string.cancel))
                 }
             }
