@@ -15,7 +15,8 @@ import java.io.File
  * sie komplett offline mit Tesseract (deutsches Bestmodell, beim Bau in die
  * APK gepackt). Titelkandidat ist die größte Textzeile auf dem GANZEN Blatt —
  * oben gewichtet bevorzugt, denn Briefe tragen ihren Titel gern mittig; Datums-
- * und Kopfzeilen sind vom Kandidatentisch ausgeschlossen. Läuft asynchron
+ * und Kopfzeilen sind vom Kandidatentisch ausgeschlossen; Formular- und
+ * Adressdeko wird kräftig abgewertet. Läuft asynchron
  * nach dem Speichern; die App wartet nie auf die OCR.
  */
 object TitleOcr {
@@ -33,12 +34,16 @@ object TitleOcr {
         try {
             val lines = readLines(api, page)
             // Ganzes Blatt statt oberem Drittel: Briefe tragen ihren Titel gern mittig.
-            // Wertung = Zeilenhöhe × Positionsgewicht — oben zählt mehr, unten bleibt erreichbar.
+            // Wertung = Zeilenhöhe × sanftes Positionsgewicht × Titelqualität — Adress-,
+            // Anrede- und Formularzeilen werden so stark abgewertet, dass selbst eine
+            // übergroße Box ihnen den Titel nicht mehr stehlen kann.
             val pageH = page.height.toFloat()
             val title = lines
                 .filter { it.text.length >= 3 && it.text.count { c -> c.isLetter() } >= 3 }
                 .filterNot { isDateOrMetaLine(it.text) }
-                .maxByOrNull { it.height * (1.3f - 0.8f * (it.top + it.height / 2f) / pageH) }
+                .maxByOrNull {
+                    it.height * (1.2f - 0.4f * (it.top + it.height / 2f) / pageH) * titleQuality(it.text)
+                }
                 ?.text
             title?.let { clean(it) } ?: fallbackTopStrip(api, page)
         } finally {
@@ -141,6 +146,23 @@ object TitleOcr {
             api.clear()
             strip.recycle()
         }
+    }
+
+    /**
+     * Titelqualität: Formular- und Adressdeko ist nie der Titel. Schrägstriche,
+     * Klammern, Postfächer, Ziffernwürste, Anreden und zusammengewürfelte Riesen-
+     * zeilen werden abgewertet — ein echter Titel übersteht das schadlos.
+     */
+    private fun titleQuality(text: String): Float {
+        var q = 1f
+        if (text.contains('/')) q *= 0.25f
+        if (text.contains('(') || text.contains(')')) q *= 0.5f
+        if (text.contains('@')) q *= 0.3f
+        if (text.count { it.isDigit() }.toFloat() / text.length >= 0.3f) q *= 0.4f
+        val t = text.trim()
+        if (t.startsWith("Frau ") || t.startsWith("Herrn ") || t.startsWith("Herr ") || t.startsWith("Sehr ")) q *= 0.2f
+        if (text.length > 55) q *= 0.6f
+        return q
     }
 
     /**
