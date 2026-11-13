@@ -1,16 +1,18 @@
 package de.ph1l1pp5.scanbird
 
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
@@ -31,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -44,10 +47,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Zeigt die erste Seite eines gespeicherten Scans — gerendert mit dem
- * eingebauten PdfRenderer, ganz ohne externe PDF-Bibliothek.
- * Pinch-Zoom bis 6x (der Fokus bleibt unter den Fingern), freies Schieben
- * im Zoom mit Klemmen am Rand, Doppeltipp schaltet zwischen 1x und 2,5x um.
+ * Zeigt ein gespeichertes PDF — gerendert mit dem eingebauten PdfRenderer, ganz
+ * ohne externe PDF-Bibliothek. Mehrseitige Scans lassen sich per Wischen
+ * blättern (unten Mitte zählt der Seiten-Chip mit), Pinch-Zoom bis 6x (der
+ * Fokus bleibt unter den Fingern), freies Schieben im Zoom mit Klemmen am
+ * Rand, Doppeltipp schaltet zwischen 1x und 2,5x um.
  * Gerendert wird mit 3facher Auflösung, damit die Vergrößerung scharf bleibt.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,8 +64,10 @@ fun PdfPreviewScreen(
     val context = LocalContext.current
     var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var openError by remember { mutableStateOf(false) }
+    var pageCount by remember { mutableStateOf(1) }
+    var currentPage by remember { mutableStateOf(0) }
 
-    LaunchedEffect(fileName) {
+    LaunchedEffect(fileName, currentPage) {
         withContext(Dispatchers.IO) {
             var descriptor: ParcelFileDescriptor? = null
             var renderer: PdfRenderer? = null
@@ -74,14 +80,21 @@ fun PdfPreviewScreen(
                     openError = true
                 } else {
                     renderer = PdfRenderer(descriptor)
-                    page = renderer.openPage(0)
-                    val scale = 3f
-                    val width = (page.width * scale).toInt().coerceAtMost(2400)
-                    val height = (page.height * scale).toInt().coerceAtMost(3400)
-                    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                    bitmap.eraseColor(Color.WHITE)
-                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                    pageBitmap = bitmap
+                    pageCount = renderer.pageCount
+                    if (currentPage >= renderer.pageCount) {
+                        // PDF kuerzer als gedacht (z. B. alt gekappt): zurueck auf
+                        // die letzte Seite — der LaunchedEffect rendert dann neu.
+                        currentPage = renderer.pageCount - 1
+                    } else {
+                        page = renderer.openPage(currentPage)
+                        val scale = 3f
+                        val width = (page.width * scale).toInt().coerceAtMost(2400)
+                        val height = (page.height * scale).toInt().coerceAtMost(3400)
+                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                        bitmap.eraseColor(android.graphics.Color.WHITE)
+                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        pageBitmap = bitmap
+                    }
                 }
             } catch (e: Exception) {
                 openError = true
@@ -113,6 +126,12 @@ fun PdfPreviewScreen(
             var zoom by remember { mutableStateOf(1f) }
             var offset by remember { mutableStateOf(Offset.Zero) }
             var viewSize by remember { mutableStateOf(IntSize.Zero) }
+
+            // Seitenwechsel: Zoom und Position kehren auf Eins zurueck.
+            LaunchedEffect(currentPage) {
+                zoom = 1f
+                offset = Offset.Zero
+            }
 
             // Schiebegrenzen: das Blatt darf nie ganz aus dem Bild geschoben werden.
             fun clamp(z: Float, raw: Offset): Offset {
@@ -158,6 +177,28 @@ fun PdfPreviewScreen(
                             zoom = newZoom
                             offset = clamp(newZoom, raw)
                         }
+                    }
+                    .pointerInput(Unit) {
+                        // Wischen blaettert — aber nur im ungezoomten Zustand, sonst
+                        // schiebt die Geste ja das versegroeserte Blatt.
+                        var dragAccum = 0f
+                        detectHorizontalDragGestures(
+                            onHorizontalDrag = { change, amount ->
+                                change.consume()
+                                dragAccum += amount
+                            },
+                            onDragEnd = {
+                                val threshold = 60.dp.toPx()
+                                if (zoom <= 1.01f && pageCount > 1) {
+                                    if (dragAccum <= -threshold && currentPage < pageCount - 1) {
+                                        currentPage += 1
+                                    } else if (dragAccum >= threshold && currentPage > 0) {
+                                        currentPage -= 1
+                                    }
+                                }
+                                dragAccum = 0f
+                            }
+                        )
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -173,6 +214,23 @@ fun PdfPreviewScreen(
                             translationY = offset.y
                         }
                 )
+
+                // Seiten-Chip unten Mitte: zaehlt mit und zeigt, wo man steht.
+                if (pageCount > 1) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 16.dp)
+                            .background(Color(0x99000000), RoundedCornerShape(999.dp))
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.page_indicator, currentPage + 1, pageCount),
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
             }
         } else {
             Text(

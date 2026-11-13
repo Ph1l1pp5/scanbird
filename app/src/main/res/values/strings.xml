@@ -45,4 +45,5 @@
     <string name="discard_pages_text">Die bereits aufgenommenen Seiten werden gelöscht.</string>
     <string name="discard_scan">Verwerfen</string>
     <string name="save_dialog_pages">%1$d Seiten werden als ein PDF gespeichert.</string>
+    <string name="page_indicator">Seite %1$d / %2$d</string>
 </resources>

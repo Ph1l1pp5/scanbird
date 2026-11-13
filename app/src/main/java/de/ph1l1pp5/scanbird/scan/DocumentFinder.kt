@@ -9,14 +9,15 @@ import kotlin.math.max
 /**
  * Findet das Blatt im Foto: die größte helle Fläche gegen den dunkleren Untergrund.
  * Die vier Ecken werden über Extremwerte von x+y und x-y bestimmt, das Ergebnis
- * mit Perspektivkorrektur (setPolyToPoly) auf A4 gebracht (150 dpi).
+ * mit Perspektivkorrektur (setPolyToPoly) auf A4 gebracht (200 dpi — seit 0.4.2,
+ * vorher 150 dpi: mehr Auflösung fuer schaerferen Text und stabilerer Titel-OCR).
  * Scheitert die Erkennung, wird das ganze Bild mittig auf A4 beschnitten.
  * Alles lokal, ohne ML Kit, ohne Netz.
  */
 object DocumentFinder {
 
-    private const val A4_WIDTH = 1240
-    private const val A4_HEIGHT = 1754
+    private const val A4_WIDTH = 1654
+    private const val A4_HEIGHT = 2339
 
     fun extractPage(source: Bitmap): Bitmap {
         return try {

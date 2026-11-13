@@ -6,7 +6,7 @@ import java.io.OutputStream
 import java.util.Locale
 
 /**
- * Minimal-PDF mit JPEG-Einbettung (DCTDecode): A4-Seiten bei 150 dpi,
+ * Minimal-PDF mit JPEG-Einbettung (DCTDecode): A4-Seiten bei 200 dpi,
  * das Foto je Seite als JPEG komprimiert eingebettet statt als Rohpixel.
  *
  * Androids PdfDocument bettet Bitmaps unkomprimiert ein — das blaehte jede
@@ -18,10 +18,10 @@ import java.util.Locale
  */
 object PdfWriter {
 
-    // A4 bei 150 dpi in Pixeln; PDF-Punkte: 1 px = 72/150 pt
-    private const val A4_WIDTH_PX = 1240
-    private const val A4_HEIGHT_PX = 1754
-    private const val PX_TO_PT = 72f / 150f
+    // A4 bei 200 dpi in Pixeln; PDF-Punkte: 1 px = 72/200 pt
+    private const val A4_WIDTH_PX = 1654
+    private const val A4_HEIGHT_PX = 2339
+    private const val PX_TO_PT = 72f / 200f
 
     /** Eine fertige PDF-Seite: JPEG-Bytes plus Pixelmasse. */
     data class Page(val width: Int, val height: Int, val jpeg: ByteArray)
@@ -29,7 +29,7 @@ object PdfWriter {
     /** Packt ein poliertes Bitmap als JPEG-Seite — das Bitmap darf danach recycelt werden. */
     fun pageOf(bitmap: Bitmap): Page {
         val jpeg = ByteArrayOutputStream().use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
             out.toByteArray()
         }
         return Page(bitmap.width, bitmap.height, jpeg)

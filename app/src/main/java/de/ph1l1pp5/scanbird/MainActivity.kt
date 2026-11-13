@@ -675,12 +675,20 @@ private suspend fun saveScan(
             }
 
             var sample = 1
-            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1200) sample *= 2
+            // Volle Quellauflösung dekodieren (bis ~2100 px): Das Kamerabild liefert
+            // mehr echte Details, als 150 dpi je hergeben — seit 0.4.2 wird das A4
+            // mit 200 dpi geschrieben, und die Politur schärft nur, was reinkommt.
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 2100) sample *= 2
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
             val rawBitmap = BitmapFactory.decodeFile(photoFile.absolutePath, opts)
                 ?: return@withContext SaveOutcome(context.getString(R.string.error_photo_empty))
 
             val upright = applyExifRotation(photoFile.absolutePath, rawBitmap)
+            // Vollauflösung braucht Platz: das ungedrehte Original fliegt sofort
+            // raus, sobald die aufrechte Kopie steht.
+            if (upright !== rawBitmap) {
+                rawBitmap.recycle()
+            }
 
             val bitmap = DocumentFinder.extractPage(upright)
             if (bitmap !== upright) {

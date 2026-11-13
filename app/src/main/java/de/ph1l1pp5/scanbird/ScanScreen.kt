@@ -49,7 +49,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -399,26 +398,36 @@ private fun CameraContent(
             )
         }
 
-        // Seiten-Puffer: Zaehler-Chip oben mittig, daneben Undo fuer die letzte Seite.
-        if (pages.isNotEmpty()) {
-            Row(
+        // Seiten-Zaehler im AutoSnap-Stil: die leuchtende Zahl oben mittig zaehlt
+        // mit und zeigt, welche Seite gerade im Sucher liegt — daneben Undo.
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .background(Color(0x99000000), RoundedCornerShape(999.dp))
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        pluralStringResource(R.plurals.pages_buffered, pages.size, pages.size),
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyMedium
+                    .scale(1f + 0.04f * snapGlow)
+                    .background(Color(0x99000000), RoundedCornerShape(999.dp))
+                    .border(
+                        width = 2.dp,
+                        color = Color(0xFF00FFFF).copy(alpha = 0.35f + 0.65f * snapGlow),
+                        shape = RoundedCornerShape(999.dp)
                     )
-                }
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    (pages.size + 1).toString(),
+                    color = Color(0xFF00FFFF),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                )
+            }
+            if (pages.isNotEmpty()) {
                 IconButton(onClick = onRemoveLast) {
                     Icon(
                         Icons.Filled.Delete,
