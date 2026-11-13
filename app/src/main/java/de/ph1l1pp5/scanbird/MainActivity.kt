@@ -10,7 +10,9 @@ import android.graphics.Matrix
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -25,7 +27,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -33,6 +37,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -41,6 +46,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -48,6 +54,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +70,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.exifinterface.media.ExifInterface
 import de.ph1l1pp5.scanbird.data.AppDatabase
+import de.ph1l1pp5.scanbird.data.BackupStore
 import de.ph1l1pp5.scanbird.data.ScanDao
 import de.ph1l1pp5.scanbird.data.ScanEntity
 import de.ph1l1pp5.scanbird.data.ScanStore
@@ -117,6 +125,13 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 
     val scans by dao.allNewestFirst().collectAsState(initial = emptyList())
 
+    // Start-Catch-up des SAF-Backups (0.5.0): Alles, was beim letzten Mal nicht
+    // mehr in die Cloud kam, wird hier still nachgezogen — auch nach einem
+    // Offline-Tag oder App-Neustart. Läuft schweigend im Hintergrund.
+    LaunchedEffect(Unit) {
+        try { BackupStore.ensureBackedUp(context, dao) } catch (e: Exception) { }
+    }
+
     var showScanner by remember { mutableStateOf(false) }
     var viewScan by remember { mutableStateOf<ScanEntity?>(null) }
     var pendingPages by remember { mutableStateOf(emptyList<File>()) }
@@ -169,7 +184,10 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             context, ScanStore.locate(context, scan.pdfFileName), newFileName
         )
         if (actual != null) {
-            dao.update(scan.copy(title = newTitle, pdfFileName = actual))
+            dao.update(scan.copy(title = newTitle, pdfFileName = actual, backedUp = false))
+            // Alte Backup-Kopie entsorgen; die neue laedt beim naechsten
+            // Sicherungslauf unter ihrem neuen Namen hoch.
+            BackupStore.removeBackupName(context, scan.pdfFileName)
             true
         } else {
             false
@@ -182,26 +200,35 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             if (!renamed) {
                 Toast.makeText(context, R.string.error_rename, Toast.LENGTH_LONG).show()
             }
+            // Umbenannt oder nicht — offene Sicherungen ziehen leise nach.
+            try { BackupStore.ensureBackedUp(context, dao) } catch (e: Exception) { }
         }
     }
 
     // M3 — Titel automatisch erkennen: Tesseract liest komplett offline, asynchron
     // nach dem Speichern. Nur wenn niemand inzwischen von Hand benannt hat,
     // setzt sich der erkannte Titel durch; der Verlauf aktualisiert sich von selbst.
+    // Danach (finally) sichert das SAF-Backup still den Rueckstand — die OCR
+    // benennt meist noch um, also erst NACH ihr kopieren, sonst laege der
+    // alte Name in der Cloud.
     fun autoTitleScan(fileName: String?, savedTitle: String?) {
         if (fileName == null || savedTitle == null) return
         scope.launch {
-            val newTitle = withContext(Dispatchers.IO) {
-                try {
-                    TitleOcr.extractTitle(context, fileName)
-                } catch (e: Exception) {
-                    null
+            try {
+                val newTitle = withContext(Dispatchers.IO) {
+                    try {
+                        TitleOcr.extractTitle(context, fileName)
+                    } catch (e: Exception) {
+                        null
+                    }
                 }
+                if (newTitle.isNullOrBlank() || newTitle == savedTitle) return@launch
+                val scanEntry = withContext(Dispatchers.IO) { dao.findByFile(fileName) } ?: return@launch
+                if (scanEntry.title != savedTitle) return@launch
+                renameScanTo(scanEntry, newTitle)
+            } finally {
+                try { BackupStore.ensureBackedUp(context, dao) } catch (e: Exception) { }
             }
-            if (newTitle.isNullOrBlank() || newTitle == savedTitle) return@launch
-            val scanEntry = withContext(Dispatchers.IO) { dao.findByFile(fileName) } ?: return@launch
-            if (scanEntry.title != savedTitle) return@launch
-            renameScanTo(scanEntry, newTitle)
         }
     }
 
@@ -615,7 +642,27 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 fun EinstellungenScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
+    val dao = remember { AppDatabase.get(context).scanDao() }
+    val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf(settings.standardText) }
+    var backupTarget by remember { mutableStateOf(settings.backupTreeUri) }
+
+    // Zielordner-Picker: StartActivityForResult statt OpenDocumentTree-Contract,
+    // denn nur der Intent aus BackupStore nimmt die persist-Berechtigung mit —
+    // ohne sie waere der Zugriff nach dem App-Neustart weg.
+    val backupPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = result.data?.data
+        if (uri != null && result.resultCode == android.app.Activity.RESULT_OK) {
+            BackupStore.saveTarget(context, uri)
+            backupTarget = uri
+            // Ziel frisch gewaehlt: den ganzen Rueckstand sofort still nachziehen.
+            scope.launch {
+                try { BackupStore.ensureBackedUp(context, dao) } catch (e: Exception) { }
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -637,6 +684,7 @@ fun EinstellungenScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp)
+                .verticalScroll(rememberScrollState())
         ) {
             Text(
                 stringResource(R.string.standard_text),
@@ -652,6 +700,42 @@ fun EinstellungenScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 3
             )
+
+            // Backup (0.5.0): SAF-Zielordner, provider-agnostisch — die App
+            // kennt weder Cloud noch Account, sie spricht nur mit dem Ordner.
+            Spacer(Modifier.height(24.dp))
+            Text(
+                stringResource(R.string.backup),
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.backup_desc),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(12.dp))
+            val target = backupTarget
+            Text(
+                if (target != null) {
+                    stringResource(R.string.backup_target_set, BackupStore.displayName(target))
+                } else {
+                    stringResource(R.string.backup_target_missing)
+                },
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) }) {
+                Text(stringResource(R.string.choose_backup_folder))
+            }
+            if (backupTarget != null) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = {
+                    BackupStore.clearTarget(context)
+                    backupTarget = null
+                }) {
+                    Text(stringResource(R.string.remove_backup_target))
+                }
+            }
         }
     }
 }

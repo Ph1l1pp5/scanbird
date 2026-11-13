@@ -46,4 +46,10 @@
     <string name="discard_scan">Verwerfen</string>
     <string name="save_dialog_pages">%1$d Seiten werden als ein PDF gespeichert.</string>
     <string name="page_indicator">Seite %1$d / %2$d</string>
+    <string name="backup">Backup</string>
+    <string name="backup_desc">Jede fertige PDF wird automatisch in den gewählten Zielordner kopiert — etwa in einer Cloud-App. Ohne Ziel: kein Backup.</string>
+    <string name="backup_target_set">Ziel: %1$s</string>
+    <string name="backup_target_missing">Noch kein Zielordner gewählt.</string>
+    <string name="choose_backup_folder">Zielordner wählen</string>
+    <string name="remove_backup_target">Ziel entfernen</string>
 </resources>

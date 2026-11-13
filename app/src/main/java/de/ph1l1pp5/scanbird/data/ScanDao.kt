@@ -18,6 +18,12 @@ interface ScanDao {
     @Query("SELECT * FROM scans WHERE pdfFileName = :fileName LIMIT 1")
     suspend fun findByFile(fileName: String): ScanEntity?
 
+    @Query("SELECT * FROM scans WHERE backedUp = 0 ORDER BY createdAt ASC")
+    suspend fun findNotBackedUp(): List<ScanEntity>
+
+    @Query("UPDATE scans SET backedUp = 1 WHERE id = :id")
+    suspend fun markBackedUp(id: Long)
+
     @Update
     suspend fun update(scan: ScanEntity)
 
