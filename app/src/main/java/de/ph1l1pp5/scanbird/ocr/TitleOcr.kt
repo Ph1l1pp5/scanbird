@@ -24,7 +24,7 @@ object TitleOcr {
     @Volatile
     private var engine: TessBaseAPI? = null
 
-    private data class Line(val text: String, val top: Int, val height: Int, val conf: Float)
+    private data class Line(val text: String, val top: Int, val height: Int, val left: Int, val width: Int, val conf: Float)
 
     /** Liest die erste Seite und schlägt einen Titel vor — null, wenn nichts Brauchbares lesbar ist. */
     fun extractTitle(context: Context, fileName: String): String? = synchronized(this) {
@@ -39,12 +39,13 @@ object TitleOcr {
             // abgewertet, dass selbst eine übergroße Box ihnen den Titel nicht mehr
             // stehlen kann; Zeilen, die Tesseract nur geraten hat, ebenso.
             val pageH = page.height.toFloat()
+            val pageW = page.width.toFloat()
             val title = lines
                 .filter { it.text.length >= 3 && it.text.count { c -> c.isLetter() } >= 3 }
                 .filterNot { isDateOrMetaLine(it.text) }
                 .maxByOrNull {
                     it.height * (1.2f - 0.4f * (it.top + it.height / 2f) / pageH) *
-                        titleQuality(it.text) * confFactor(it.conf)
+                        sideFactor(it, pageW) * titleQuality(it.text) * confFactor(it.conf)
                 }
                 ?.text
             title?.let { clean(it) } ?: fallbackTopStrip(api, page)
@@ -123,7 +124,7 @@ object TitleOcr {
                 val text = iter.getUTF8Text(PageIteratorLevel.RIL_TEXTLINE)?.trim() ?: ""
                 val conf = iter.confidence(PageIteratorLevel.RIL_TEXTLINE)
                 if (text.isNotEmpty() && rect.height() > 0) {
-                    lines.add(Line(text, rect.top, rect.height(), conf))
+                    lines.add(Line(text, rect.top, rect.height(), rect.left, rect.width(), conf))
                 }
             } while (iter.next(PageIteratorLevel.RIL_TEXTLINE))
             iter.delete()
@@ -149,6 +150,15 @@ object TitleOcr {
             api.clear()
             strip.recycle()
         }
+    }
+
+    /**
+     * Briefkopf-Logos wohnen oben rechts: Zeilen, deren Mitte rechts der
+     * Seitenmitte sitzt, sind Schmuck, kein Titel — kraeftig abgewertet.
+     */
+    private fun sideFactor(line: Line, pageW: Float): Float {
+        val centerX = (line.left + line.width / 2f) / pageW
+        return if (centerX > 0.62f) 0.3f else 1f
     }
 
     /**
@@ -183,6 +193,16 @@ object TitleOcr {
         if (words.size >= 2 && words.all { it.length <= 3 }) q *= 0.3f
         // Aufzählungs-Punkte sind Inhalt, kein Titel.
         if (t.startsWith("-") || t.startsWith("–") || t.startsWith("*") || t.startsWith("•")) q *= 0.3f
+        // Kamelhuftiger Markenname („IntegrationsHilfen“): Firmen- und Vereins-
+        // Logos sind Briefkopf, kein Titel.
+        var prevLower = false
+        for (c in t) {
+            if (prevLower && c.isUpperCase()) {
+                q *= 0.3f
+                break
+            }
+            prevLower = c.isLowerCase()
+        }
         return q
     }
 

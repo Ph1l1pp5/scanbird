@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
@@ -43,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,6 +70,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun ScanScreen(
     onClose: () -> Unit,
+    paused: Boolean,
     onCapture: (List<File>) -> Unit
 ) {
     val context = LocalContext.current
@@ -78,7 +79,7 @@ fun ScanScreen(
 
     // Zurueck-Knopf mit gepufferten Seiten: erst nachfragen, sonst wandern vier
     // Seiten Arbeit mit einem Fehlipp ins Nirwana.
-    BackHandler(enabled = pages.isNotEmpty()) { discardConfirm = true }
+    BackHandler(enabled = pages.isNotEmpty() && !paused) { discardConfirm = true }
 
     fun requestClose() {
         if (pages.isEmpty()) onClose() else discardConfirm = true
@@ -105,13 +106,16 @@ fun ScanScreen(
     ) {
         if (hasPermission) {
             CameraContent(
+                paused = paused,
                 pages = pages,
-                onPageCaptured = { file -> pages = pages + file },
+                onPageCaptured = { file ->
+                    pages = pages + file
+                    onCapture(pages)
+                },
                 onRemoveLast = {
                     pages.lastOrNull()?.delete()
                     pages = pages.dropLast(1)
-                },
-                onFinish = onCapture
+                }
             )
         } else {
             Text(
@@ -170,15 +174,18 @@ fun ScanScreen(
 
 @Composable
 private fun CameraContent(
+    paused: Boolean,
     pages: List<File>,
     onPageCaptured: (File) -> Unit,
-    onRemoveLast: () -> Unit,
-    onFinish: (List<File>) -> Unit
+    onRemoveLast: () -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    // Live-Wert des Pausen-Flags: der Analyser-Thread fragt ihn je Frame ab —
+    // ein einmal eingefrorener Konstruktor-Boolean wuerde nie aktualisieren.
+    val pausedNow = rememberUpdatedState(paused)
 
     var torchOn by remember { mutableStateOf(true) }
     var camera by remember { mutableStateOf<Camera?>(null) }
@@ -218,6 +225,8 @@ private fun CameraContent(
     }
 
     fun takeShot() {
+        // Waehrend der Speichern-Dialog offen ist, knipst nichts — auch der AutoSnap nicht.
+        if (paused) return
         if (!capturing.compareAndSet(false, true)) return
         val dir = File(context.cacheDir, "captures").apply { mkdirs() }
         val file = File(dir, "scan_" + System.currentTimeMillis() + ".jpg")
@@ -267,7 +276,8 @@ private fun CameraContent(
                             analysisExecutor,
                             SteadyAnalyzer(
                                 onSteady = { mainExecutor.execute { takeShot() } },
-                                onProgress = { progress -> mainExecutor.execute { snapProgress = progress } }
+                                onProgress = { progress -> mainExecutor.execute { snapProgress = progress } },
+                                isPaused = { pausedNow.value }
                             )
                         )
                         provider.unbindAll()
@@ -417,24 +427,6 @@ private fun CameraContent(
                     )
                 }
             }
-
-            // Fertig-Knopf: schliesst den Batch ab — alle Seiten wandern als
-            // ein PDF in den Speichern-Dialog.
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 24.dp, bottom = 32.dp)
-                    .size(64.dp)
-                    .background(Color(0xFF2E7D32), CircleShape)
-                    .clickable { onFinish(pages) },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Filled.Check,
-                    contentDescription = stringResource(R.string.finish_scan),
-                    tint = Color.White
-                )
-            }
         }
     }
 
@@ -458,7 +450,8 @@ private fun CameraContent(
  */
 private class SteadyAnalyzer(
     private val onSteady: () -> Unit,
-    private val onProgress: (Float) -> Unit
+    private val onProgress: (Float) -> Unit,
+    private val isPaused: () -> Boolean
 ) : ImageAnalysis.Analyzer {
 
     private var previous: FloatArray? = null
@@ -488,31 +481,39 @@ private class SteadyAnalyzer(
                     }
                 }
             }
-            val prev = previous
-            if (prev != null && prev.size == grid.size) {
-                var diff = 0f
-                for (i in grid.indices) {
-                    val d = grid[i] - prev[i]
-                    diff += if (d >= 0f) d else -d
-                }
-                diff /= grid.size
-                if (diff < 6f) {
-                    steadyFrames++
-                } else {
-                    steadyFrames = 0
-                    sawMotion = true
-                }
-                if (steadyFrames == STEADY_TRIGGER) {
-                    steadyFrames = 0
-                    // Nach jedem Snap muss erst wieder Bewegung rein — das Blatt
-                    // drehen zaehlt. Sonst feuert der AutoSnap im Sekundentakt
-                    // dasselbe ruhige Blatt ab.
-                    if (sawMotion) {
-                        sawMotion = false
-                        onSteady()
+            if (isPaused()) {
+                // Speichern-Dialog offen: keine Ruhe zaehlt, kein Re-Armen —
+                // nach dem Weiter-Knopf verlangt der AutoSnap erst wieder Bewegung.
+                steadyFrames = 0
+                sawMotion = false
+                onProgress(0f)
+            } else {
+                val prev = previous
+                if (prev != null && prev.size == grid.size) {
+                    var diff = 0f
+                    for (i in grid.indices) {
+                        val d = grid[i] - prev[i]
+                        diff += if (d >= 0f) d else -d
                     }
+                    diff /= grid.size
+                    if (diff < 6f) {
+                        steadyFrames++
+                    } else {
+                        steadyFrames = 0
+                        sawMotion = true
+                    }
+                    if (steadyFrames == STEADY_TRIGGER) {
+                        steadyFrames = 0
+                        // Nach jedem Snap muss erst wieder Bewegung rein — das Blatt
+                        // drehen zaehlt. Sonst feuert der AutoSnap im Sekundentakt
+                        // dasselbe ruhige Blatt ab.
+                        if (sawMotion) {
+                            sawMotion = false
+                            onSteady()
+                        }
+                    }
+                    onProgress(if (sawMotion) steadyFrames / STEADY_TRIGGER.toFloat() else 0f)
                 }
-                onProgress(if (sawMotion) steadyFrames / STEADY_TRIGGER.toFloat() else 0f)
             }
             previous = grid
         } finally {

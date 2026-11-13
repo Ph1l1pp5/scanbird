@@ -253,19 +253,6 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         return
     }
 
-    if (showScanner) {
-        ScanScreen(
-            onClose = { showScanner = false },
-            onCapture = { files ->
-                pendingPages = files
-                showScanner = false
-                titleInput = defaultTitle()
-                showSaveDialog = true
-            }
-        )
-        return
-    }
-
     fun saveNow() {
         val files = pendingPages
         if (files.isEmpty()) {
@@ -278,11 +265,78 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             showSaveDialog = false
             if (outcome.error == null) {
                 pendingPages = emptyList()
+                showScanner = false
                 autoTitleScan(outcome.fileName, outcome.title)
             } else {
+                // Fehlgeschlagene Seiten rueumen wir weg; der Fehler-Dialog lebt
+                // im Haupt-Baum, also dorthin zurueck.
+                for (file in files) {
+                    try {
+                        file.delete()
+                    } catch (e: Exception) {
+                    }
+                }
+                pendingPages = emptyList()
+                showScanner = false
                 saveErrorDetail = outcome.error
             }
         }
+    }
+
+    if (showScanner) {
+        ScanScreen(
+            paused = showSaveDialog,
+            onClose = {
+                showScanner = false
+                pendingPages = emptyList()
+            },
+            onCapture = { files ->
+                // Titel-Vorschlag nur bei der ersten Seite — spaetere Seiten
+                // scannen in dasselbe Dokument, der Titel bleibt der von Seite 1.
+                val firstPage = pendingPages.isEmpty()
+                pendingPages = files
+                if (firstPage) {
+                    titleInput = defaultTitle()
+                }
+                showSaveDialog = true
+            }
+        )
+        // Der Speichern-Dialog liegt im Scanner-Zweig: Die Kamera bleibt dahinter
+        // offen, der Weiter-Knopf kehrt direkt zurueck ins Suchbild.
+        if (showSaveDialog) {
+            AlertDialog(
+                onDismissRequest = { showSaveDialog = false },
+                title = { Text(stringResource(R.string.save_title)) },
+                text = {
+                    Column {
+                        OutlinedTextField(
+                            value = titleInput,
+                            onValueChange = { titleInput = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (pendingPages.size > 1) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                stringResource(R.string.save_dialog_pages, pendingPages.size),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { saveNow() }) {
+                        Text(stringResource(R.string.save))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSaveDialog = false }) {
+                        Text(stringResource(R.string.continue_scan))
+                    }
+                }
+            )
+        }
+        return
     }
 
     Scaffold(
@@ -330,7 +384,11 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showScanner = true }) {
+            FloatingActionButton(onClick = {
+                showSaveDialog = false
+                pendingPages = emptyList()
+                showScanner = true
+            }) {
                 Icon(
                     Icons.Filled.Add,
                     contentDescription = stringResource(R.string.scan)
@@ -441,39 +499,6 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         }
     }
 
-    if (showSaveDialog) {
-        AlertDialog(
-            onDismissRequest = { showSaveDialog = false },
-            title = { Text(stringResource(R.string.save_title)) },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = titleInput,
-                        onValueChange = { titleInput = it },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (pendingPages.size > 1) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.save_dialog_pages, pendingPages.size),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { saveNow() }) {
-                    Text(stringResource(R.string.save))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSaveDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
-        )
-    }
 
     val scanToRename = scanForRename
     if (scanToRename != null) {
