@@ -45,7 +45,8 @@ object TitleOcr {
                 .filterNot { isDateOrMetaLine(it.text) }
                 .maxByOrNull {
                     it.height * (1.2f - 0.4f * (it.top + it.height / 2f) / pageH) *
-                        sideFactor(it, pageW) * titleQuality(it.text) * confFactor(it.conf)
+                        sideFactor(it, pageW) * titleQuality(it.text) * confFactor(it.conf) *
+                        capsFactor(it.text)
                 }
                 ?.text
             title?.let { clean(it) } ?: fallbackTopStrip(api, page)
@@ -162,6 +163,18 @@ object TitleOcr {
     }
 
     /**
+     * GROSSBUCHSTABEN-Bonus: Praxis-Ueberschriften stehen gern komplett versal
+     * („LIEFERSCHEIN Nr. …“, „RÜCKSENDECHEIN“). Erst ab 8 Buchstaben zahlt der
+     * Bonus — kurze Logo-Fetzen wie „VERLAG“ oder „GmbH“ gehen leer aus.
+     */
+    private fun capsFactor(text: String): Float {
+        val bonus = text.split(" ").any { w ->
+            w.length >= 8 && w.all { it.isLetter() && it.isUpperCase() }
+        }
+        return if (bonus) 1.7f else 1f
+    }
+
+    /**
      * Lese-Konfidenz (0-100) als Wertungsfaktor: Sichere Zeilen zählen voll,
      * Geratene fast gar nicht — Mülltitel bekommen so keine Chance mehr.
      */
@@ -173,8 +186,9 @@ object TitleOcr {
 
     /**
      * Titelqualität: Formular- und Adressdeko ist nie der Titel. Schrägstriche,
-     * Klammern, Postfächer, Ziffernwürste, Anreden und zusammengewürfelte Riesen-
-     * zeilen werden abgewertet — ein echter Titel übersteht das schadlos.
+     * Klammern, Postfächer, Ziffernwürste, Anreden, Formular-Etiketten,
+     * Tabellenköpfe und zusammengewürfelte Riesenzeilen werden abgewertet —
+     * ein echter Titel übersteht das schadlos.
      */
     private fun titleQuality(text: String): Float {
         var q = 1f
@@ -193,6 +207,14 @@ object TitleOcr {
         if (words.size >= 2 && words.all { it.length <= 3 }) q *= 0.3f
         // Aufzählungs-Punkte sind Inhalt, kein Titel.
         if (t.startsWith("-") || t.startsWith("–") || t.startsWith("*") || t.startsWith("•")) q *= 0.3f
+        // Formular-Etiketten sind Felddeko, kein Titel (Anschrift, Kundennummer —
+        // „anschr“ reicht als Treffer, weil Tesseract das Wort gern verbiegt).
+        val lower = t.lowercase()
+        if (lower.contains("anschr") || lower.contains("kundennummer")) q *= 0.3f
+        // Tabellenkopf-Wörter: Pos., Art-Nr., Artikel, Bezeichnung, Menge —
+        // wer zwei davon in EINER Zeile trägt, ist Spaltenbeschriftung.
+        val tableHits = listOf("pos.", "art-nr", "artikel", "bezeichnung", "menge", "mge.").count { lower.contains(it) }
+        if (tableHits >= 2) q *= 0.2f
         // Kamelhuftiger Markenname („IntegrationsHilfen“): Firmen- und Vereins-
         // Logos sind Briefkopf, kein Titel.
         var prevLower = false
