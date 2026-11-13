@@ -731,6 +731,11 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
             Button(onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) }) {
                 Text(stringResource(R.string.choose_backup_folder))
             }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.backup_hint),
+                style = MaterialTheme.typography.bodySmall
+            )
             if (backupTarget != null) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = onOpenCleanup) {
