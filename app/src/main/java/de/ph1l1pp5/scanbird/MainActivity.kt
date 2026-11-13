@@ -102,7 +102,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Verlauf, Einstellungen }
+private enum class Screen { Verlauf, Einstellungen, CloudSpeicher }
 
 @Composable
 fun ScanbirdApp() {
@@ -110,7 +110,11 @@ fun ScanbirdApp() {
 
     when (screen) {
         Screen.Verlauf -> VerlaufScreen(onOpenSettings = { screen = Screen.Einstellungen })
-        Screen.Einstellungen -> EinstellungenScreen(onBack = { screen = Screen.Verlauf })
+        Screen.Einstellungen -> EinstellungenScreen(
+            onBack = { screen = Screen.Verlauf },
+            onOpenCleanup = { screen = Screen.CloudSpeicher }
+        )
+        Screen.CloudSpeicher -> CloudCleanupScreen(onBack = { screen = Screen.Einstellungen })
     }
 }
 
@@ -639,7 +643,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EinstellungenScreen(onBack: () -> Unit) {
+fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
     val dao = remember { AppDatabase.get(context).scanDao() }
@@ -729,6 +733,10 @@ fun EinstellungenScreen(onBack: () -> Unit) {
             }
             if (backupTarget != null) {
                 Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onOpenCleanup) {
+                    Text(stringResource(R.string.cloud_cleanup))
+                }
+                Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = {
                     BackupStore.clearTarget(context)
                     backupTarget = null
@@ -740,11 +748,216 @@ fun EinstellungenScreen(onBack: () -> Unit) {
     }
 }
 
+/**
+ * Cloud-Aufräumen (0.5.1): Der Zielordner von außen betrachtet — Dateien aus
+ * der Cloud ankreuzen und gezielt löschen, ohne die Scans auf dem Gerät zu
+ * berühren. Aufgeräumte Dateien werden bewusst NICHT wieder hochgeladen.
+ */
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@Composable
+fun CloudCleanupScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var backupTarget by remember { mutableStateOf(SettingsStore(context).backupTreeUri) }
+    var files by remember { mutableStateOf<List<BackupStore.BackupFile>?>(null) }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var reloadTick by remember { mutableStateOf(0) }
+
+    // Ordnerinhalt frisch laden: beim Betreten und nach jedem Löschen.
+    LaunchedEffect(backupTarget, reloadTick) {
+        if (backupTarget == null) {
+            files = null
+        } else {
+            files = withContext(Dispatchers.IO) { BackupStore.listBackupFiles(context) }
+            val ids = files.orEmpty().map { it.documentId }.toSet()
+            selected = selected.intersect(ids)
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.cloud_storage)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back)
+                        )
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        if (backupTarget == null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    stringResource(R.string.cloud_no_target),
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp)
+            ) {
+                val list = files
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        stringResource(R.string.cloud_file_count, list?.size ?: 0),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (!list.isNullOrEmpty()) {
+                        TextButton(onClick = {
+                            selected = if (selected.size == list.size) {
+                                emptySet()
+                            } else {
+                                list.map { it.documentId }.toSet()
+                            }
+                        }) {
+                            Text(
+                                stringResource(
+                                    if (selected.size == list.size) {
+                                        R.string.cloud_select_none
+                                    } else {
+                                        R.string.cloud_select_all
+                                    }
+                                )
+                            )
+                        }
+                    }
+                }
+
+                when {
+                    list == null -> Text(
+                        stringResource(R.string.pdf_loading),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    list.isEmpty() -> Text(
+                        stringResource(R.string.cloud_empty),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    else -> LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    ) {
+                        items(list, key = { it.documentId }) { file ->
+                            val checked = file.documentId in selected
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .combinedClickable(
+                                        onClick = {
+                                            selected = if (checked) {
+                                                selected - file.documentId
+                                            } else {
+                                                selected + file.documentId
+                                            }
+                                        },
+                                        onLongClick = { }
+                                    )
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        selected = if (checked) {
+                                            selected - file.documentId
+                                        } else {
+                                            selected + file.documentId
+                                        }
+                                    }
+                                )
+                                Column {
+                                    Text(
+                                        file.name,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        formatDate(file.lastModified) + " · " +
+                                            formatSize(file.size),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { confirmDelete = true },
+                    enabled = selected.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.delete_scan))
+                }
+            }
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(stringResource(R.string.cloud_delete_title)) },
+            text = { Text(stringResource(R.string.cloud_delete_text, selected.size)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    val toDelete = selected.toList()
+                    scope.launch {
+                        val count = withContext(Dispatchers.IO) {
+                            BackupStore.deleteBackupFiles(context, toDelete)
+                        }
+                        selected = emptySet()
+                        reloadTick++
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.cloud_deleted, count),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }) { Text(stringResource(R.string.delete_scan)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+}
+
 private fun defaultTitle(): String =
     "Scan " + SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date())
 
 private fun formatDate(millis: Long): String =
     SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date(millis))
+
+/** Dateigrösse für die Cloud-Ansicht: MB ab einer Megabyte, sonst KB. */
+private fun formatSize(bytes: Long): String =
+    if (bytes >= 1024 * 1024) {
+        String.format(Locale.GERMANY, "%.1f MB", bytes / (1024.0 * 1024.0))
+    } else {
+        String.format(Locale.GERMANY, "%d KB", bytes / 1024)
+    }
 
 // Liefert bei Erfolg Dateinamen und Titel des neuen Scans zurück; sonst eine Klartext-Ursache.
 private suspend fun saveScan(

@@ -26,6 +26,14 @@ import java.io.FileInputStream
  */
 object BackupStore {
 
+    /** Eine Datei im Backup-Zielordner — Grundlage der Aufräum-Ansicht (0.5.1). */
+    data class BackupFile(
+        val documentId: String,
+        val name: String,
+        val size: Long,
+        val lastModified: Long
+    )
+
     /** Ordner-Picker: URI mitsamt dauerhaft haltbarer Berechtigung anfordern. */
     fun pickFolderIntent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
         addFlags(
@@ -167,21 +175,77 @@ object BackupStore {
         }
     }
 
-    /** Namen aller Dateien im Zielordner — Restore-Grundlage fuer spaeter. */
-    private fun listChildren(context: Context, tree: Uri): HashSet<String>? = try {
-        val root = DocumentsContract.getTreeDocumentId(tree)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, root)
-        val names = HashSet<String>()
-        context.contentResolver.query(
-            childrenUri,
-            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            null, null, null
-        )?.use { c ->
-            val col = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-            if (col >= 0) while (c.moveToNext()) names.add(c.getString(col))
-        }
-        names
+    /**
+     * Alle Dateien im Zielordner, neueste zuerst — die Aufräum-Ansicht in den
+     * Einstellungen. Liefert null ohne Ziel oder bei Lesefehler, eine leere
+     * Liste bei leerem Ordner.
+     */
+    fun listBackupFiles(context: Context): List<BackupFile>? = try {
+        val tree = target(context) ?: return null
+        queryFiles(context, tree)
     } catch (e: Exception) {
         null
+    }
+
+    /**
+     * Dateien im Zielordner loeschen (Cloud-Aufräumen). Das Backup ist danach
+     * bewusst weg: Aufräumen heisst NICHT beim naechsten Lauf wieder hochladen —
+     * der backedUp-Vermerk in der Datenbank bleibt unberuehrt. Die Scans auf
+     * dem Geraet bleiben immer erhalten. Liefert die Zahl der geloeschten Dateien.
+     */
+    fun deleteBackupFiles(context: Context, documentIds: List<String>): Int {
+        val tree = target(context) ?: return 0
+        var deleted = 0
+        for (id in documentIds) {
+            try {
+                val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
+                if (context.contentResolver.delete(docUri, null, null) > 0) deleted++
+            } catch (e: Exception) {
+            }
+        }
+        return deleted
+    }
+
+    /** Namen aller Dateien im Zielordner — Restore-Grundlage fuer spaeter. */
+    private fun listChildren(context: Context, tree: Uri): HashSet<String>? = try {
+        queryFiles(context, tree).mapTo(HashSet()) { it.name }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Zielordner abfragen: alle Dokumente mit Name, Groesse, Aenderungsdatum. */
+    private fun queryFiles(context: Context, tree: Uri): List<BackupFile> {
+        val root = DocumentsContract.getTreeDocumentId(tree)
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, root)
+        val result = ArrayList<BackupFile>()
+        context.contentResolver.query(
+            childrenUri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            ),
+            null, null, null
+        )?.use { c ->
+            val idCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val sizeCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+            val modCol = c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            if (idCol >= 0 && nameCol >= 0) {
+                while (c.moveToNext()) {
+                    result.add(
+                        BackupFile(
+                            documentId = c.getString(idCol) ?: continue,
+                            name = c.getString(nameCol) ?: "",
+                            size = if (sizeCol >= 0) c.getLong(sizeCol) else 0L,
+                            lastModified = if (modCol >= 0) c.getLong(modCol) else 0L
+                        )
+                    )
+                }
+            }
+        }
+        result.sortByDescending { it.lastModified }
+        return result
     }
 }

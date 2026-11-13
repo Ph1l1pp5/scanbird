@@ -52,4 +52,14 @@
     <string name="backup_target_missing">Noch kein Zielordner gewählt.</string>
     <string name="choose_backup_folder">Zielordner wählen</string>
     <string name="remove_backup_target">Ziel entfernen</string>
+    <string name="cloud_storage">Cloud-Speicher</string>
+    <string name="cloud_cleanup">Cloud-Speicher aufräumen</string>
+    <string name="cloud_no_target">Kein Backup-Zielordner gewählt — erst in den Backup-Einstellungen einrichten.</string>
+    <string name="cloud_file_count">%1$d Dateien im Zielordner</string>
+    <string name="cloud_empty">Im Zielordner liegen keine Dateien.</string>
+    <string name="cloud_delete_title">Aus der Cloud löschen?</string>
+    <string name="cloud_delete_text">%1$d Dateien werden im Zielordner gelöscht. Die Scans auf dem Gerät bleiben erhalten.</string>
+    <string name="cloud_deleted">%1$d Dateien aus der Cloud gelöscht.</string>
+    <string name="cloud_select_all">Alle auswählen</string>
+    <string name="cloud_select_none">Auswahl aufheben</string>
 </resources>
