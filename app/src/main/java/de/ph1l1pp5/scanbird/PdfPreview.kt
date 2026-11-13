@@ -48,11 +48,12 @@ import kotlinx.coroutines.withContext
 
 /**
  * Zeigt ein gespeichertes PDF — gerendert mit dem eingebauten PdfRenderer, ganz
- * ohne externe PDF-Bibliothek. VOLLBILD: Systemleisten werden weggeblendet und
- * per Wisch-Geste an den Rand wieder hervorgeholt; zurueck geht es mit der
- * Android-Zurueck-Geste. Mehrseitige Scans lassen sich per Wischen blättern
- * (unten Mitte zählt der Seiten-Chip mit), Pinch-Zoom bis 6x (der Fokus bleibt
- * unter den Fingern), freies Schieben im Zoom mit Klemmen am Rand, Doppeltipp
+ * ohne externe PDF-Bibliothek. VOLLBILD: Die Statusleiste oben wird
+ * weggeblendet (Wisch von oben holt sie kurz zurueck), die Android-Leiste
+ * unten bleibt sichtbar — 3-Button-Nutzer behalten ihren Zurueck-Knopf,
+ * Gesten-Nutzer ihren Wisch vom Rand. Mehrseitige Scans lassen sich per
+ * Wischen blättern (unten Mitte zählt der Seiten-Chip mit), Pinch-Zoom bis 6x
+ * (der Fokus bleibt unter den Fingern), freies Schieben im Zoom mit Klemmen
  * schaltet zwischen 1x und 2,5x um. Gerendert wird mit 3facher Auflösung, damit
  * die Vergrößerung scharf bleibt.
  */
@@ -107,18 +108,20 @@ fun PdfPreviewScreen(
         }
     }
 
-    // Vollbild: Systemleisten verschwinden; der Wisch vom Rand ist sofort die
-    // Android-Zurueck-Geste (kein Zwischen-Einblenden) — und er fuehrt zur Liste.
+    // Vollbild: Nur die obere Statusleiste verschwindet (Wisch von oben
+    // blendet sie kurz ein). Die Android-Leiste unten BLEIBT sichtbar — Nutzer
+    // mit 3-Button-Steuerung behalten ihren Zurueck-Knopf, Gesten-Nutzer ihren
+    // Wisch vom Rand. Fenster-Insets bleiben auf Standard, der Inhalt rutscht
+    // automatisch ueber die sichtbare Leiste.
     val view = LocalView.current
     DisposableEffect(Unit) {
         val window = (view.context as? Activity)?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
-        window?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
-        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
-        controller?.hide(WindowInsetsCompat.Type.systemBars())
+        controller?.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.hide(WindowInsetsCompat.Type.statusBars())
         onDispose {
-            controller?.show(WindowInsetsCompat.Type.systemBars())
-            window?.let { WindowCompat.setDecorFitsSystemWindows(it, true) }
+            controller?.show(WindowInsetsCompat.Type.statusBars())
         }
     }
     BackHandler(onBack = onBack)
