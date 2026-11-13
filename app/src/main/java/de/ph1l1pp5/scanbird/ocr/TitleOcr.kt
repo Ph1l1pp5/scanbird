@@ -12,9 +12,10 @@ import java.io.File
 
 /**
  * Lokaler Titel-Leser (M3): rendert die erste Seite des fertigen PDFs und liest
- * sie komplett offline mit Tesseract (deutsches Schnellmodell, beim Bau in die
- * APK gepackt). Titelkandidat ist die größte Textzeile im oberen Blattdrittel —
- * auf Praxisblättern ist das die fettgedruckte Überschrift. Läuft asynchron
+ * sie komplett offline mit Tesseract (deutsches Bestmodell, beim Bau in die
+ * APK gepackt). Titelkandidat ist die größte Textzeile auf dem GANZEN Blatt —
+ * oben gewichtet bevorzugt, denn Briefe tragen ihren Titel gern mittig; Datums-
+ * und Kopfzeilen sind vom Kandidatentisch ausgeschlossen. Läuft asynchron
  * nach dem Speichern; die App wartet nie auf die OCR.
  */
 object TitleOcr {
@@ -31,10 +32,13 @@ object TitleOcr {
         val page = renderFirstPage(fd) ?: return null
         try {
             val lines = readLines(api, page)
-            val topArea = page.height * 0.35f
+            // Ganzes Blatt statt oberem Drittel: Briefe tragen ihren Titel gern mittig.
+            // Wertung = Zeilenhöhe × Positionsgewicht — oben zählt mehr, unten bleibt erreichbar.
+            val pageH = page.height.toFloat()
             val title = lines
-                .filter { it.top <= topArea && it.text.length >= 3 && it.text.count { c -> c.isLetter() } >= 3 }
-                .maxByOrNull { it.height }
+                .filter { it.text.length >= 3 && it.text.count { c -> c.isLetter() } >= 3 }
+                .filterNot { isDateOrMetaLine(it.text) }
+                .maxByOrNull { it.height * (1.3f - 0.8f * (it.top + it.height / 2f) / pageH) }
                 ?.text
             title?.let { clean(it) } ?: fallbackTopStrip(api, page)
         } finally {
@@ -137,6 +141,35 @@ object TitleOcr {
             api.clear()
             strip.recycle()
         }
+    }
+
+    /**
+     * Datums- und Briefkopf-Deko ist nie der Titel: Zeilen mit „, den“ oder einem
+     * Datum TT.MM.JJJJ fliegen raus — ohne Regex, nur Ziffern- und Punktsichtung.
+     */
+    private fun isDateOrMetaLine(text: String): Boolean {
+        val t = text
+        if (t.contains(", den ")) return true
+        var i = 0
+        while (i < t.length) {
+            if (t[i].isDigit()) {
+                var j = i
+                while (j < t.length && t[j].isDigit()) j++
+                if (j - i in 1..2 && j < t.length && t[j] == '.') {
+                    var k = j + 1
+                    while (k < t.length && t[k].isDigit()) k++
+                    if (k - j - 1 in 1..2 && k < t.length && t[k] == '.') {
+                        var m = k + 1
+                        while (m < t.length && t[m].isDigit()) m++
+                        if (m - k - 1 in 2..4) return true
+                    }
+                }
+                i = j
+            } else {
+                i++
+            }
+        }
+        return false
     }
 
     /** Putzt einen gelesenen Titel: Leerraum zusammen, Schmuckzeichen weg, Mindestlänge. */

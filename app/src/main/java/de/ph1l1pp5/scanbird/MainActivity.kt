@@ -699,7 +699,15 @@ private fun fileTitle(raw: String): String =
         .replace(' ', '_')
         .map { if (it.code in 32..126) it else '_' }
         .joinToString("")
-        .take(40)
+        .let { cutAtWordBoundary(it, 40) }
+
+/** Kappung an der Wortgrenze: nie mitten im Wort abschneiden („…Kultur Ba“). */
+private fun cutAtWordBoundary(s: String, max: Int): String {
+    if (s.length <= max) return s
+    val cut = s.take(max)
+    val atWord = cut.lastIndexOf('_')
+    return if (atWord >= max / 2) cut.substring(0, atWord) else cut.trimEnd('_')
+}
 
 // JPEGs tragen die Drehung in den EXIF-Daten; BitmapFactory ignoriert sie, wir nicht.
 private fun applyExifRotation(path: String, bitmap: Bitmap): Bitmap {

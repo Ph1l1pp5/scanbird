@@ -4,8 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tan
 
@@ -14,7 +16,7 @@ import kotlin.math.tan
  * (1) Beleuchtung plätten — das Bild wird durch sein großes Box-Gemittel geteilt,
  *     das hebt Schatten, Überbelichtung und Knitterschatten auf gleichmäßiges
  *     Papierweiß. (2) Sauvola-Binarisierung für knackscharfen Scanner-Kontrast.
- *     (3) Restschiefe über Profil-Bewertung geraderücken. (4) Dunkle Tischreste
+ *     (3) Kippung bis ±8 Grad über Profil-Bewertung geraderücken. (4) Dunkle Tischreste
  *     an den Rändern abschneiden, damit das Blatt den Rahmen füllt.
  * Keine externe Bibliothek — nur Summentabellen und Matrizen, alles offline.
  */
@@ -134,7 +136,7 @@ object ScanPolish {
     }
 
     /**
-     * Restschiefe schätzen: für jeden Kandidatenwinkel werden die schwarzen Pixel auf
+     * Kippung schätzen (bis ±8 Grad): für jeden Kandidatenwinkel werden die schwarzen Pixel auf
      * gedrehte Zeilen projiziert — bei passendem Winkel rücken Textzeilen auf wenige
      * Projektionszeilen, das Profil wird messerscharf (Summe der Quadrate maximal).
      */
@@ -152,25 +154,43 @@ object ScanPolish {
                 k++
             }
         }
+        // Bei textreichen Blättern die Stützpunkte dünnen — 150.000 reichen locker,
+        // auch wenn 65 Winkelkandidaten durchprobiert werden.
+        var count = n
+        if (n > 150000) {
+            val stride = (n + 149999) / 150000
+            count = 0
+            var i = 0
+            while (i < n) {
+                xs[count] = xs[i]
+                ys[count] = ys[i]
+                count++
+                i += stride
+            }
+        }
         val cx = w / 2f
         var bestAngle = 0f
         var bestScore = -1L
-        for (step in 0 until 21) {
-            val deg = -2.5f + 0.25f * step
+        var score0 = 0L
+        for (step in 0 until 65) {
+            val deg = -8f + 0.25f * step
             val slope = tan(deg * PI.toFloat() / 180f)
             val hist = IntArray(h + 64)
-            for (i in 0 until n) {
+            for (i in 0 until count) {
                 val yPrime = (ys[i] - slope * (xs[i] - cx)).toInt() + 32
                 if (yPrime >= 0 && yPrime < hist.size) hist[yPrime]++
             }
             var score = 0L
             for (v in hist) score += v.toLong() * v
+            if (deg == 0f) score0 = score
             if (score > bestScore) {
                 bestScore = score
                 bestAngle = deg
             }
         }
-        return bestAngle
+        // Sicherheitsmargin: nur drehen, wenn der Winkel das Profil deutlich schärft —
+        // Scheinwinkel bei Stempeln und Grafiken bleiben so unbeanstandet.
+        return if (bestScore * 100 > score0 * 115) bestAngle else 0f
     }
 
     private fun binaryToBitmap(binary: IntArray, w: Int, h: Int): Bitmap {
@@ -184,7 +204,7 @@ object ScanPolish {
         return bmp
     }
 
-    /** Geraderücken: um den geschätzten Restwinkel drehen und wieder auf A4-Ausschnitt ziehen. */
+    /** Geraderücken: um den geschätzten Kippwinkel drehen, verlustarm auf A4-Ausschnitt ziehen. */
     private fun reframe(bmp: Bitmap, angleDeg: Float): Bitmap {
         if (abs(angleDeg) < 0.3f) return bmp
         val w = bmp.width
@@ -194,16 +214,19 @@ object ScanPolish {
         val rotated = Bitmap.createBitmap(bmp, 0, 0, w, h, m, true)
         if (rotated === bmp) return bmp
         bmp.recycle()
-        // Größtes zentriertes Rechteck im ursprünglichen Seitenverhältnis schneiden …
-        val targetAspect = w.toFloat() / h
-        val rAspect = rotated.width.toFloat() / rotated.height
-        var cropW = rotated.width
-        var cropH = rotated.height
-        if (rAspect > targetAspect) {
-            cropW = (rotated.height * targetAspect).toInt()
-        } else {
-            cropH = (rotated.width / targetAspect).toInt()
-        }
+        // Größtes achsenfestes Rechteck im ORIGINAL-Seitenverhältnis, das garantiert
+        // INNERHALB des gedrehten Blatts liegt — analytisch gelöst statt blind vom
+        // Rahmen geschnitten (u·cosθ + v·sinθ = w/2, u·sinθ + v·cosθ = h/2, u/v = w/h).
+        // Keine schwarzen Eckkeile mehr, an den Ecken geht nur weißer Blattrand flöten.
+        val a = w.toFloat() / h
+        val rad = abs(angleDeg) * PI.toFloat() / 180f
+        val cosR = cos(rad)
+        val sinR = sin(rad)
+        val s1 = w / (a * cosR + sinR)
+        val s2 = h / (a * sinR + cosR)
+        val s = min(s1, s2)
+        val cropW = (a * s).toInt().coerceAtMost(rotated.width)
+        val cropH = s.toInt().coerceAtMost(rotated.height)
         val x = (rotated.width - cropW) / 2
         val y = (rotated.height - cropH) / 2
         val cropped = Bitmap.createBitmap(rotated, x, y, cropW, cropH)
