@@ -15,8 +15,8 @@ import java.io.File
  * sie komplett offline mit Tesseract (deutsches Bestmodell, beim Bau in die
  * APK gepackt). Titelkandidat ist die größte Textzeile auf dem GANZEN Blatt —
  * oben gewichtet bevorzugt, denn Briefe tragen ihren Titel gern mittig; Datums-
- * und Kopfzeilen sind vom Kandidatentisch ausgeschlossen; Formular- und
- * Adressdeko wird kräftig abgewertet. Läuft asynchron
+ * und Kopfzeilen sind vom Kandidatentisch ausgeschlossen; Formular-, Adress-
+ * und nur geratene Zeilen werden kräftig abgewertet. Läuft asynchron
  * nach dem Speichern; die App wartet nie auf die OCR.
  */
 object TitleOcr {
@@ -24,7 +24,7 @@ object TitleOcr {
     @Volatile
     private var engine: TessBaseAPI? = null
 
-    private data class Line(val text: String, val top: Int, val height: Int)
+    private data class Line(val text: String, val top: Int, val height: Int, val conf: Float)
 
     /** Liest die erste Seite und schlägt einen Titel vor — null, wenn nichts Brauchbares lesbar ist. */
     fun extractTitle(context: Context, fileName: String): String? = synchronized(this) {
@@ -34,15 +34,17 @@ object TitleOcr {
         try {
             val lines = readLines(api, page)
             // Ganzes Blatt statt oberem Drittel: Briefe tragen ihren Titel gern mittig.
-            // Wertung = Zeilenhöhe × sanftes Positionsgewicht × Titelqualität — Adress-,
-            // Anrede- und Formularzeilen werden so stark abgewertet, dass selbst eine
-            // übergroße Box ihnen den Titel nicht mehr stehlen kann.
+            // Wertung = Zeilenhöhe × sanftes Positionsgewicht × Titelqualität ×
+            // Lese-Konfidenz — Adress-, Anrede- und Formularzeilen werden so stark
+            // abgewertet, dass selbst eine übergroße Box ihnen den Titel nicht mehr
+            // stehlen kann; Zeilen, die Tesseract nur geraten hat, ebenso.
             val pageH = page.height.toFloat()
             val title = lines
                 .filter { it.text.length >= 3 && it.text.count { c -> c.isLetter() } >= 3 }
                 .filterNot { isDateOrMetaLine(it.text) }
                 .maxByOrNull {
-                    it.height * (1.2f - 0.4f * (it.top + it.height / 2f) / pageH) * titleQuality(it.text)
+                    it.height * (1.2f - 0.4f * (it.top + it.height / 2f) / pageH) *
+                        titleQuality(it.text) * confFactor(it.conf)
                 }
                 ?.text
             title?.let { clean(it) } ?: fallbackTopStrip(api, page)
@@ -81,7 +83,7 @@ object TitleOcr {
         }
     }
 
-    /** Rendert Seite 1 des PDFs in nativer Auflösung (1240 px) — mehr Kante fürs Titel-Lesen. */
+    /** Rendert Seite 1 des PDFs hochskaliert (2480 px ≈ 300 dpi) — bei 1240 px verkleben Fettbuchstaben zu Blob-Glyphen. */
     private fun renderFirstPage(fd: ParcelFileDescriptor): Bitmap? {
         var renderer: PdfRenderer? = null
         try {
@@ -90,7 +92,7 @@ object TitleOcr {
             var page: PdfRenderer.Page? = null
             try {
                 page = renderer.openPage(0)
-                val scale = 1240f / page.width
+                val scale = 2480f / page.width
                 val w = (page.width * scale).toInt().coerceAtLeast(1)
                 val h = (page.height * scale).toInt().coerceAtLeast(1)
                 val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
@@ -119,8 +121,9 @@ object TitleOcr {
             do {
                 val rect = iter.getBoundingRect(PageIteratorLevel.RIL_TEXTLINE)
                 val text = iter.getUTF8Text(PageIteratorLevel.RIL_TEXTLINE)?.trim() ?: ""
+                val conf = iter.confidence(PageIteratorLevel.RIL_TEXTLINE)
                 if (text.isNotEmpty() && rect.height() > 0) {
-                    lines.add(Line(text, rect.top, rect.height()))
+                    lines.add(Line(text, rect.top, rect.height(), conf))
                 }
             } while (iter.next(PageIteratorLevel.RIL_TEXTLINE))
             iter.delete()
@@ -149,6 +152,16 @@ object TitleOcr {
     }
 
     /**
+     * Lese-Konfidenz (0-100) als Wertungsfaktor: Sichere Zeilen zählen voll,
+     * Geratene fast gar nicht — Mülltitel bekommen so keine Chance mehr.
+     */
+    private fun confFactor(conf: Float): Float = when {
+        conf >= 75f -> 1f
+        conf >= 55f -> 0.7f
+        else -> 0.2f
+    }
+
+    /**
      * Titelqualität: Formular- und Adressdeko ist nie der Titel. Schrägstriche,
      * Klammern, Postfächer, Ziffernwürste, Anreden und zusammengewürfelte Riesen-
      * zeilen werden abgewertet — ein echter Titel übersteht das schadlos.
@@ -162,6 +175,14 @@ object TitleOcr {
         val t = text.trim()
         if (t.startsWith("Frau ") || t.startsWith("Herrn ") || t.startsWith("Herr ") || t.startsWith("Sehr ")) q *= 0.2f
         if (text.length > 55) q *= 0.6f
+        // Geister-Zeilen: fast nur Kürzel und Einzelzeichen sind Tesseract-Rauschen.
+        val words = t.split(" ").filter { it.isNotEmpty() }
+        val letters = text.count { it.isLetter() }.toFloat()
+        if (text.length > 0 && letters / text.length < 0.7f) q *= 0.2f
+        if (words.count { it.length == 1 } >= 2) q *= 0.3f
+        if (words.size >= 2 && words.all { it.length <= 3 }) q *= 0.3f
+        // Aufzählungs-Punkte sind Inhalt, kein Titel.
+        if (t.startsWith("-") || t.startsWith("–") || t.startsWith("*") || t.startsWith("•")) q *= 0.3f
         return q
     }
 
