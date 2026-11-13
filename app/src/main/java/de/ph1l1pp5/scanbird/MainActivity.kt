@@ -12,10 +12,13 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -37,7 +41,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -421,42 +424,63 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
                     var menuOpen by remember { mutableStateOf(false) }
                     val isSelected = scan.id in selectedIds
                     Box {
-                        ListItem(
-                            modifier = Modifier.combinedClickable(
-                                onClick = {
-                                    if (selectionMode) {
-                                        selectedIds = if (isSelected) selectedIds - scan.id
-                                        else selectedIds + scan.id
-                                    } else {
-                                        viewScan = scan
-                                    }
-                                },
-                                onLongClick = { if (!selectionMode) menuOpen = true }
-                            ),
-                            leadingContent = {
-                                if (selectionMode) {
-                                    Checkbox(
-                                        checked = isSelected,
-                                        onCheckedChange = {
+                        // Verlaufs-Pille im AutoSnap-Stil: sehr breit, dunkler Grund,
+                        // Neon-Cyan-Rand — Titel und Datum sitzen drin.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                                .combinedClickable(
+                                    onClick = {
+                                        if (selectionMode) {
                                             selectedIds = if (isSelected) selectedIds - scan.id
                                             else selectedIds + scan.id
+                                        } else {
+                                            viewScan = scan
                                         }
+                                    },
+                                    onLongClick = { if (!selectionMode) menuOpen = true }
+                                )
+                                .background(Color(0x99000000), RoundedCornerShape(999.dp))
+                                .border(
+                                    width = 2.dp,
+                                    color = Color(0xFF00FFFF).copy(alpha = 0.55f),
+                                    shape = RoundedCornerShape(999.dp)
+                                )
+                                .padding(horizontal = 20.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (selectionMode) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = {
+                                        selectedIds = if (isSelected) selectedIds - scan.id
+                                        else selectedIds + scan.id
+                                    }
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    scan.title,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    formatDate(scan.createdAt),
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            if (!selectionMode) {
+                                IconButton(onClick = { mailScan(scan) }) {
+                                    Icon(
+                                        Icons.Filled.Email,
+                                        contentDescription = stringResource(R.string.send_as_mail),
+                                        tint = Color.White
                                     )
                                 }
-                            },
-                            headlineContent = { Text(scan.title) },
-                            supportingContent = { Text(formatDate(scan.createdAt)) },
-                            trailingContent = {
-                                if (!selectionMode) {
-                                    IconButton(onClick = { mailScan(scan) }) {
-                                        Icon(
-                                            Icons.Filled.Email,
-                                            contentDescription = stringResource(R.string.send_as_mail)
-                                        )
-                                    }
-                                }
                             }
-                        )
+                        }
                         DropdownMenu(
                             expanded = menuOpen,
                             onDismissRequest = { menuOpen = false }

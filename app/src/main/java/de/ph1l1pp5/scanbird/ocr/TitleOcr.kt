@@ -40,15 +40,27 @@ object TitleOcr {
             // stehlen kann; Zeilen, die Tesseract nur geraten hat, ebenso.
             val pageH = page.height.toFloat()
             val pageW = page.width.toFloat()
-            val title = lines
-                .filter { it.text.length >= 3 && it.text.count { c -> c.isLetter() } >= 3 }
-                .filterNot { isDateOrMetaLine(it.text) }
-                .maxByOrNull {
-                    it.height * (1.2f - 0.4f * (it.top + it.height / 2f) / pageH) *
-                        sideFactor(it, pageW) * titleQuality(it.text) * confFactor(it.conf) *
-                        capsFactor(it.text)
+            // PLZ-Flag je Zeile: Wer direkt ueber „22045 Hamburg“ sitzt, gehoert zum
+            // Adressblock (Name, Strasse, Praxis) — das ist nie der Titel.
+            val plzFlags = lines.map { isPlzLine(it.text) }
+            var best: Line? = null
+            var bestScore = 0f
+            lines.forEachIndexed { i, line ->
+                if (line.text.length >= 3 && line.text.count { c -> c.isLetter() } >= 3 &&
+                    !isDateOrMetaLine(line.text)
+                ) {
+                    val score = line.height *
+                        (1.2f - 0.4f * (line.top + line.height / 2f) / pageH) *
+                        sideFactor(line, pageW) * titleQuality(line.text) *
+                        confFactor(line.conf) * capsFactor(line.text) *
+                        addressFactor(i, lines, plzFlags)
+                    if (score > bestScore) {
+                        bestScore = score
+                        best = line
+                    }
                 }
-                ?.text
+            }
+            val title = best?.text
             title?.let { clean(it) } ?: fallbackTopStrip(api, page)
         } finally {
             page.recycle()
@@ -175,6 +187,40 @@ object TitleOcr {
     }
 
     /**
+     * PLZ-Zeile: genau 5 Ziffern in Folge, dann Leerzeichen, dann Buchstabe
+     * („22045 Hamburg“) — Aktenzeichen mit laengeren Ziffernwoertern zaehlen nicht.
+     */
+    private fun isPlzLine(text: String): Boolean {
+        var i = 0
+        while (i < text.length) {
+            if (text[i].isDigit()) {
+                var j = i
+                while (j < text.length && text[j].isDigit()) j++
+                if (j - i == 5 && j < text.length - 1 && text[j] == ' ' &&
+                    text[j + 1].isLetter() && (i == 0 || !text[i - 1].isDigit())
+                ) return true
+                i = j
+            } else {
+                i++
+            }
+        }
+        return false
+    }
+
+    /**
+     * Adressblock-Killer: Zeilen, ueber denen (innerhalb der naechsten zwei
+     * Zeilen in Leserichtung) eine PLZ-Zeile liegt, sind Name oder Strasse.
+     * Groesse vergleichen: Eine deutliche Ueberschrift ueber einer PLZ-Zeile
+     * bleibt unbestraft, gleiche Fliesstext-Hoehe wird abgewertet.
+     */
+    private fun addressFactor(i: Int, lines: List<Line>, plzFlags: List<Boolean>): Float {
+        for (j in i + 1..minOf(i + 2, lines.lastIndex)) {
+            if (plzFlags[j] && lines[i].height <= lines[j].height * 1.3f) return 0.3f
+        }
+        return 1f
+    }
+
+    /**
      * Lese-Konfidenz (0-100) als Wertungsfaktor: Sichere Zeilen zählen voll,
      * Geratene fast gar nicht — Mülltitel bekommen so keine Chance mehr.
      */
@@ -195,14 +241,20 @@ object TitleOcr {
         if (text.contains('/')) q *= 0.25f
         if (text.contains('(') || text.contains(')')) q *= 0.5f
         if (text.contains('@')) q *= 0.3f
-        if (text.count { it.isDigit() }.toFloat() / text.length >= 0.3f) q *= 0.4f
         val t = text.trim()
         if (t.startsWith("Frau ") || t.startsWith("Herrn ") || t.startsWith("Herr ") || t.startsWith("Sehr ")) q *= 0.2f
         if (text.length > 55) q *= 0.6f
         // Geister-Zeilen: fast nur Kürzel und Einzelzeichen sind Tesseract-Rauschen.
         val words = t.split(" ").filter { it.isNotEmpty() }
         val letters = text.count { it.isLetter() }.toFloat()
-        if (text.length > 0 && letters / text.length < 0.7f) q *= 0.2f
+        // Versal-Pardon: Eine Zeile mit GROSSER Dokument-Art („LIEFERSCHEIN
+        // Nr. TLIE72612418“) ist ein gueltiger Titel MIT Aktenzeichen — die
+        // Ziffernwurst- und Buchstabenmangel-Strafen greifen fuer sie nicht.
+        val capsWord = words.any { w -> w.length >= 8 && w.all { it.isLetter() && it.isUpperCase() } }
+        if (!capsWord) {
+            if (text.count { it.isDigit() }.toFloat() / text.length >= 0.3f) q *= 0.4f
+            if (text.length > 0 && letters / text.length < 0.7f) q *= 0.2f
+        }
         if (words.count { it.length == 1 } >= 2) q *= 0.3f
         if (words.size >= 2 && words.all { it.length <= 3 }) q *= 0.3f
         // Aufzählungs-Punkte sind Inhalt, kein Titel.

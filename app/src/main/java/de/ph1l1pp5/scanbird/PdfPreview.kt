@@ -1,8 +1,10 @@
 package de.ph1l1pp5.scanbird
 
+import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -13,18 +15,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,22 +35,27 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import de.ph1l1pp5.scanbird.data.ScanStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
  * Zeigt ein gespeichertes PDF — gerendert mit dem eingebauten PdfRenderer, ganz
- * ohne externe PDF-Bibliothek. Mehrseitige Scans lassen sich per Wischen
- * blättern (unten Mitte zählt der Seiten-Chip mit), Pinch-Zoom bis 6x (der
- * Fokus bleibt unter den Fingern), freies Schieben im Zoom mit Klemmen am
- * Rand, Doppeltipp schaltet zwischen 1x und 2,5x um.
- * Gerendert wird mit 3facher Auflösung, damit die Vergrößerung scharf bleibt.
+ * ohne externe PDF-Bibliothek. VOLLBILD: Systemleisten werden weggeblendet und
+ * per Wisch-Geste an den Rand wieder hervorgeholt; zurueck geht es mit der
+ * Android-Zurueck-Geste. Mehrseitige Scans lassen sich per Wischen blättern
+ * (unten Mitte zählt der Seiten-Chip mit), Pinch-Zoom bis 6x (der Fokus bleibt
+ * unter den Fingern), freies Schieben im Zoom mit Klemmen am Rand, Doppeltipp
+ * schaltet zwischen 1x und 2,5x um. Gerendert wird mit 3facher Auflösung, damit
+ * die Vergrößerung scharf bleibt.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PdfPreviewScreen(
     title: String,
@@ -106,21 +107,28 @@ fun PdfPreviewScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(title) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back)
-                        )
-                    }
-                }
-            )
+    // Vollbild: Systemleisten verschwinden, kommen per Wisch-Geste an den
+    // Bildschirmrand zurueck — und die Android-Zurueck-Geste fuehrt zur Liste.
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        val window = (view.context as? Activity)?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        window?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
+        controller?.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.hide(WindowInsetsCompat.Type.systemBars())
+        onDispose {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+            window?.let { WindowCompat.setDecorFitsSystemWindows(it, true) }
         }
-    ) { padding ->
+    }
+    BackHandler(onBack = onBack)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0B0B0F))
+    ) {
         val bitmap = pageBitmap
         if (bitmap != null) {
             var zoom by remember { mutableStateOf(1f) }
@@ -148,7 +156,6 @@ fun PdfPreviewScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
                     .onSizeChanged { viewSize = it }
                     .pointerInput(Unit) {
                         detectTapGestures(
@@ -235,10 +242,10 @@ fun PdfPreviewScreen(
         } else {
             Text(
                 stringResource(R.string.pdf_loading),
+                color = Color.White,
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(padding)
                     .padding(16.dp)
             )
         }
