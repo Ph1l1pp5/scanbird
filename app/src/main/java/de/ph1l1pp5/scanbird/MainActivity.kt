@@ -10,6 +10,7 @@ import android.graphics.Matrix
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -156,6 +157,13 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<Long>()) }
     var confirmDeleteMany by remember { mutableStateOf(false) }
+
+    // Gesten-Zurück in der Mehrfachauswahl: erst die Auswahl verlassen, nie
+    // die App schließen — schliessen darf nur die Hauptansicht (0.5.4).
+    BackHandler(enabled = selectionMode) {
+        selectionMode = false
+        selectedIds = emptySet()
+    }
 
     fun openScanFolder() {
         val intent = ScanStore.folderIntent(context)
@@ -648,6 +656,8 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
+    // Gesten-Zurück: zurück in die Hauptansicht, nicht die App schließen.
+    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
     val dao = remember { AppDatabase.get(context).scanDao() }
@@ -831,13 +841,23 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun CloudCleanupScreen(onBack: () -> Unit) {
+    // Gesten-Zurück: erst die Auswahl verlassen, sonst zurück zu den
+    // Einstellungen — die App schließt hier nie (0.5.4).
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    BackHandler {
+        if (selectionMode) {
+            selectionMode = false
+            selectedIds = emptySet()
+        } else {
+            onBack()
+        }
+    }
     val context = LocalContext.current
     val dao = remember { AppDatabase.get(context).scanDao() }
     val scope = rememberCoroutineScope()
     var backupTarget by remember { mutableStateOf(SettingsStore(context).backupTreeUri) }
     var files by remember { mutableStateOf<List<BackupStore.BackupFile>?>(null) }
-    var selectionMode by remember { mutableStateOf(false) }
-    var selectedIds by remember { mutableStateOf(setOf<String>()) }
     var fileForRename by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
     var fileForDelete by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
     var confirmDeleteMany by remember { mutableStateOf(false) }

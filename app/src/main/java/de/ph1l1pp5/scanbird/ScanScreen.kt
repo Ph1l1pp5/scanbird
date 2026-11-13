@@ -78,11 +78,14 @@ fun ScanScreen(
 
     // Zurueck-Knopf mit gepufferten Seiten: erst nachfragen, sonst wandern vier
     // Seiten Arbeit mit einem Fehlipp ins Nirwana.
-    BackHandler(enabled = pages.isNotEmpty() && !paused) { discardConfirm = true }
-
     fun requestClose() {
         if (pages.isEmpty()) onClose() else discardConfirm = true
     }
+
+    // Gesten-Zurück schließt den Scanner statt der App: ohne gepufferte Seiten
+    // direkt zurück in den Verlauf, mit Seiten erst die Verwerfen-Rückfrage.
+    // Während des Speichern-Dialogs (paused) fängt der Dialog selbst ab.
+    BackHandler(enabled = !paused) { requestClose() }
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
