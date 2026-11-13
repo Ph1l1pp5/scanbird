@@ -232,7 +232,7 @@ object BackupStore {
         }
 
     /** Eine Cloud-PDF in den Arbeitsordner ziehen und eintragen. */
-    private fun restoreOne(
+    private suspend fun restoreOne(
         context: Context,
         tree: Uri,
         file: BackupFile,
