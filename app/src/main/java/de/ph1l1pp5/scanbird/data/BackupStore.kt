@@ -170,10 +170,21 @@ object BackupStore {
         //    lebt er — dann direkt nutzen, ganz ohne Wurzel-Abfrage.
         val cachedId = settings.backupFolderId
         if (cachedId != null && settings.backupFolderTree == tree.toString()) {
-            try {
+            val children = try {
                 queryFiles(context, tree, cachedId)
-                return ResolvedFolder(cachedId, null)
             } catch (e: Exception) {
+                settings.backupFolderId = null
+                null
+            }
+            if (children != null) {
+                // Ehrlichkeits-Probe (0.5.18): Eine LEERE Liste kann echt
+                // oder gelogen sein — manche Anbieter (kDrive) werfen nicht,
+                // sie zeigen nur nichts. Die Probe entscheidet.
+                if (children.isNotEmpty() ||
+                    folderListingHonest(context, tree, cachedId)
+                ) {
+                    return ResolvedFolder(cachedId, null)
+                }
                 settings.backupFolderId = null
             }
         }
@@ -189,19 +200,26 @@ object BackupStore {
             )
         }
         for (candidate in candidates) {
-            try {
+            val children = try {
                 queryFiles(context, tree, candidate.documentId)
-                settings.backupFolderTree = tree.toString()
-                settings.backupFolderId = candidate.documentId
-                return ResolvedFolder(candidate.documentId, null)
             } catch (e: Exception) {
+                continue
             }
+            // Leere Liste ohne Inhalt: echt oder gelogen — Probe (0.5.18).
+            if (children.isEmpty() &&
+                !folderListingHonest(context, tree, candidate.documentId)
+            ) {
+                continue
+            }
+            settings.backupFolderTree = tree.toString()
+            settings.backupFolderId = candidate.documentId
+            return ResolvedFolder(candidate.documentId, null)
         }
         if (candidates.isNotEmpty()) {
             return ResolvedFolder(
                 null,
-                "Ordner pruefen: \"$FOLDER_NAME\" existiert, laesst sich aber " +
-                    "nicht oeffnen — evtl. Sync-Problem der Cloud-App."
+                "Der Scanbird-Ordner im Ziel lässt sich nicht zuverlässig " +
+                    "lesen — bitte den Scanbird-Ordner direkt als Ziel auswählen."
             )
         }
         // Blindheits-Test (0.5.17): Ist der Scanbird-Ordner laut Abfrage
@@ -521,6 +539,39 @@ object BackupStore {
         val tail = if (base.contains("__")) base.substringAfter("__") else base
         val title = tail.replace('_', ' ').trim()
         return if (title.isBlank()) name else title
+    }
+
+    /** Ehrlichkeits-Probe (0.5.18): Eine Wegwerf-Datei im Ordner anlegen —
+     *  taucht sie in der Auflistung NICHT auf, luegt der Anbieter: Eine
+     *  leere Liste bedeutet dann nichts, und die PDFs im Ordner waeren
+     *  fuer Aufraeumen und Wiederherstellen unsichtbar (kDrive-Fall). */
+    private fun folderListingHonest(
+        context: Context,
+        tree: Uri,
+        folderId: String
+    ): Boolean {
+        val probeName = ".scanbird-probe-" + System.currentTimeMillis()
+        val probe = try {
+            DocumentsContract.createDocument(
+                context.contentResolver,
+                DocumentsContract.buildDocumentUriUsingTree(tree, folderId),
+                "text/plain",
+                probeName
+            )
+        } catch (e: Exception) {
+            return false
+        }
+        if (probe == null) return false
+        val visible = try {
+            queryFiles(context, tree, folderId).any { it.name == probeName }
+        } catch (e: Exception) {
+            false
+        }
+        try {
+            context.contentResolver.delete(probe, null, null)
+        } catch (e: Exception) {
+        }
+        return visible
     }
 
     /** Kinder eines Ordners im Ziel: alle Dokumente mit Name, Typ, Groesse,
