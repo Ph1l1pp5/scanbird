@@ -52,7 +52,7 @@
     <string name="backup_target_problem">Das gewählte Ziel ist nicht einsatzbereit — bitte den Scanbird-Ordner direkt als Ziel auswählen.</string>
     <string name="backup_target_missing">Noch kein Zielordner gewählt.</string>
     <string name="choose_backup_folder">Zielordner wählen</string>
-    <string name="backup_hint">Einrichtung in 3 Schritten:\n1. Im Auswahldialog oben links auf ☰ tippen.\n2. Cloud-App antippen (z. B. kDrive).\n3. Den Ordner „Scanbird“ direkt antippen — fehlt er noch, einen leeren Ort wählen: Scanbird legt „Scanbird“ dort automatisch an.\nTipp für kDrive: Den Scanbird-Ordner direkt als Ziel wählen — kDrive erkennt Unterordner im Ziel nicht immer.\nAb jetzt landet jeder Scan automatisch dort.</string>
+    <string name="backup_hint">Einrichtung in 3 Schritten:\n1. Im Auswahldialog oben links auf ☰ tippen.\n2. Cloud-App antippen (z. B. kDrive).\n3. Ist der Ordner „Scanbird“ bereits vorhanden, bitte direkt auswählen. Fehlt er: gewünschtes Ziel auswählen — Scanbird legt den Ordner dort selbst an.\nAb dann landet jeder Scan automatisch dort.</string>
     <string name="remove_backup_target">Ziel entfernen</string>
     <string name="cloud_storage">Cloud-Speicher</string>
     <string name="cloud_cleanup">Cloud-Speicher aufräumen</string>
