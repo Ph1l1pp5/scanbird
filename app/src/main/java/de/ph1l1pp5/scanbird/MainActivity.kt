@@ -704,9 +704,21 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
     var restorable by remember { mutableStateOf(0) }
     var restoring by remember { mutableStateOf(false) }
 
+    // Ziel-Check (0.5.15): Laesst sich der Scanbird-Ordner im Ziel nicht
+    // finden oder anlegen, steht das hier offen im Bild — kDrive-Nutzer
+    // muessen den Ordner direkt waehlen, und das sagt die App jetzt auch.
+    var targetProblem by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(backupTarget) {
-        restorable = if (backupTarget == null) 0
-        else BackupStore.countRestorable(context, dao)
+        if (backupTarget == null) {
+            restorable = 0
+            targetProblem = null
+        } else {
+            targetProblem = withContext(Dispatchers.IO) {
+                BackupStore.resolveFolder(context).error
+            }
+            restorable = BackupStore.countRestorable(context, dao)
+        }
     }
 
     // Zielordner-Picker: StartActivityForResult statt OpenDocumentTree-Contract,
@@ -830,6 +842,20 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     ),
                     style = MaterialTheme.typography.bodyMedium
                 )
+                if (targetProblem != null) {
+                    // 0.5.15: Ziel gewaehlt, aber der Scanbird-Ordner darin
+                    // nicht auffindbar — sofort sagen statt still scheitern.
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.backup_target_problem),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        targetProblem ?: "",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(onClick = onOpenCleanup, border = NeonRainbowBorder) {
                     Text(stringResource(R.string.cloud_cleanup))

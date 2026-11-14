@@ -13,8 +13,8 @@ android {
         applicationId = "de.ph1l1pp5.scanbird"
         minSdk = 26
         targetSdk = 34
-        versionCode = 43
-        versionName = "0.5.14"
+        versionCode = 44
+        versionName = "0.5.15"
     }
 
     buildTypes {
