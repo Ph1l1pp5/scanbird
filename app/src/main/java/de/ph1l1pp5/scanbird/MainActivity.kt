@@ -133,7 +133,9 @@ private val MetallicSheen = Brush.linearGradient(
         Color(0xFFEEF1F5)  // zurueck zu Silber
     )
 )
-private val MetallicBorder = BorderStroke(2.dp, MetallicSheen)
+/** 0.5.8: Alle Knöpfe tragen denselben Neon-Regenbogen-Rand wie die Pillen
+ *  in der Vorschau — die Metall-Flaeche des Zielordner-Knopfs bleibt. */
+private val NeonRainbowBorder = BorderStroke(2.dp, RainbowNeon)
 
 /** 0.5.6: Der Zielordner-Knopf trägt den Regenbogen als Fläche, die Schrift
  *  dunkle Tinte — auf dem Neon-Mix gut lesbar und nicht grün. */
@@ -804,6 +806,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                 Button(
                     onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) },
                     shape = RainbowShape,
+                    border = NeonRainbowBorder,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.Transparent,
                         contentColor = NeonInk
@@ -828,7 +831,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onOpenCleanup, border = MetallicBorder) {
+                OutlinedButton(onClick = onOpenCleanup, border = NeonRainbowBorder) {
                     Text(stringResource(R.string.cloud_cleanup))
                 }
                 if (restorable > 0) {
@@ -836,7 +839,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     OutlinedButton(
                         onClick = { runRestore() },
                         enabled = !restoring,
-                        border = MetallicBorder
+                        border = NeonRainbowBorder
                     ) {
                         Text(stringResource(R.string.restore_button))
                     }
@@ -850,6 +853,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                 Button(
                     onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) },
                     shape = RainbowShape,
+                    border = NeonRainbowBorder,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.Transparent,
                         contentColor = NeonInk
@@ -864,7 +868,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                         BackupStore.clearTarget(context)
                         backupTarget = null
                     },
-                    border = MetallicBorder
+                    border = NeonRainbowBorder
                 ) {
                     Text(stringResource(R.string.remove_backup_target))
                 }
