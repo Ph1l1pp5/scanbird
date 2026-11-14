@@ -297,15 +297,74 @@ object BackupStore {
 
     /**
      * Alle Dateien im Scanbird-Ordner, neueste zuerst — die Aufräum-Ansicht in
-     * den Einstellungen. Liefert null ohne Ziel oder bei Lesefehler, eine
-     * leere Liste bei leerem Ordner.
+     * den Einstellungen. Seit 0.5.10 mit Diagnose: Schlägt ein Schritt fehl,
+     * nennt error den Schritt samt Ausnahme — statt null und Stille.
      */
-    fun listBackupFiles(context: Context): List<BackupFile>? = try {
-        val tree = target(context) ?: return null
-        val folderId = scanbirdFolder(context) ?: return null
-        queryFiles(context, tree, folderId)
-    } catch (e: Exception) {
-        null
+    data class ListResult(
+        val files: List<BackupFile>?,
+        val error: String?
+    )
+
+    fun listBackupFiles(context: Context): ListResult {
+        val tree = target(context)
+            ?: return ListResult(null, "Kein Zielordner gespeichert.")
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        val folderId: String = try {
+            if (displayName(tree) == FOLDER_NAME) {
+                rootId
+            } else {
+                val children = try {
+                    queryFiles(context, tree, rootId)
+                } catch (e: Exception) {
+                    return ListResult(
+                        null,
+                        "Wurzel-Abfrage: ${e.javaClass.simpleName}: ${e.message}"
+                    )
+                }
+                val found = children.firstOrNull {
+                    it.name == FOLDER_NAME &&
+                        it.mime == DocumentsContract.Document.MIME_TYPE_DIR
+                }
+                if (found != null) {
+                    found.documentId
+                } else {
+                    try {
+                        val created = DocumentsContract.createDocument(
+                            context.contentResolver,
+                            DocumentsContract.buildDocumentUriUsingTree(tree, rootId),
+                            DocumentsContract.Document.MIME_TYPE_DIR,
+                            FOLDER_NAME
+                        )
+                        if (created != null) {
+                            DocumentsContract.getDocumentId(created)
+                        } else {
+                            return ListResult(
+                                null,
+                                "Ordner anlegen: createDocument lieferte null."
+                            )
+                        }
+                    } catch (e: Exception) {
+                        return ListResult(
+                            null,
+                            "Ordner anlegen: ${e.javaClass.simpleName}: ${e.message}"
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            return ListResult(
+                null,
+                "Ziel-Zugriff: ${e.javaClass.simpleName}: ${e.message}"
+            )
+        }
+        return try {
+            ListResult(queryFiles(context, tree, folderId), null)
+        } catch (e: Exception) {
+            ListResult(
+                null,
+                "Ordnerinhalt-Abfrage: ${e.javaClass.simpleName}: ${e.message}"
+            )
+        }
     }
 
     /**

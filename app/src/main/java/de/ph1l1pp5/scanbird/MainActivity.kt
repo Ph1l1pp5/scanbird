@@ -904,7 +904,7 @@ fun CloudCleanupScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var backupTarget by remember { mutableStateOf(SettingsStore(context).backupTreeUri) }
     var files by remember { mutableStateOf<List<BackupStore.BackupFile>?>(null) }
-    var loadFailed by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var fileForRename by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
     var fileForDelete by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
     var confirmDeleteMany by remember { mutableStateOf(false) }
@@ -914,20 +914,22 @@ fun CloudCleanupScreen(onBack: () -> Unit) {
     LaunchedEffect(backupTarget, reloadTick) {
         if (backupTarget == null) {
             files = null
-            loadFailed = false
+            loadError = null
         } else {
-            // Erst null heisst hier: wird geladen. Bleibt die Antwort null,
-            // ist der Scanbird-Ordner nicht erreichbar — 0.5.9 zeigt dann
-            // statt des ewigen "Wird geladen" eine Fehlermeldung.
+            // Erst null heisst: wird geladen. Seit 0.5.10 nennt die Antwort
+            // bei Misserfolg den Schritt und Grund — Diagnose vom Geraet,
+            // nicht vom Raten.
             files = null
-            loadFailed = false
-            files = withContext(Dispatchers.IO) { BackupStore.listBackupFiles(context) }
-            if (files == null) {
-                loadFailed = true
-                return@LaunchedEffect
+            loadError = null
+            val result = withContext(Dispatchers.IO) {
+                BackupStore.listBackupFiles(context)
             }
-            val ids = files.orEmpty().map { it.documentId }.toSet()
-            selectedIds = selectedIds.intersect(ids)
+            files = result.files
+            loadError = result.error
+            if (files != null) {
+                val ids = files.orEmpty().map { it.documentId }.toSet()
+                selectedIds = selectedIds.intersect(ids)
+            }
         }
     }
 
@@ -1045,12 +1047,20 @@ fun CloudCleanupScreen(onBack: () -> Unit) {
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (loadFailed) {
+                if (loadError != null) {
                     // 0.5.9: Der Scanbird-Ordner ist nicht erreichbar —
                     // vorher stand hier endlos "Wird geladen".
+                    // 0.5.10: Darunter steht die Diagnose vom Geraet.
                     Text(
                         stringResource(R.string.cloud_load_failed),
                         style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 32.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        loadError ?: "",
+                        style = MaterialTheme.typography.bodySmall,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 32.dp)
                     )
