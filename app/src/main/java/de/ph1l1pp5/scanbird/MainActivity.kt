@@ -120,7 +120,20 @@ private val RainbowNeon = Brush.linearGradient(
         Color(0xFF8A2BFF)  // Neon-Violett
     )
 )
-private val NeonRainbowBorder = BorderStroke(2.dp, RainbowNeon)
+
+/** 0.5.7: Knoepfe in gebuerstetem Metall mit dezentem Regenbogen-Schimmer —
+ *  gestreckter Verlauf (wenige, sanfte Farbstufen), ruhig statt verspielt.
+ *  Die Pillen-Raender behalten den vollen Neon-Regenbogen. */
+private val MetallicSheen = Brush.linearGradient(
+    listOf(
+        Color(0xFFF5F7FA), // poliertes Silber
+        Color(0xFFE4DDF1), // Silber mit Violett-Schimmer
+        Color(0xFFD2E6EE), // Silber mit Blau-Schimmer
+        Color(0xFFF7DEE8), // Silber mit Rosa-Schimmer
+        Color(0xFFEEF1F5)  // zurueck zu Silber
+    )
+)
+private val MetallicBorder = BorderStroke(2.dp, MetallicSheen)
 
 /** 0.5.6: Der Zielordner-Knopf trägt den Regenbogen als Fläche, die Schrift
  *  dunkle Tinte — auf dem Neon-Mix gut lesbar und nicht grün. */
@@ -795,7 +808,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                         containerColor = Color.Transparent,
                         contentColor = NeonInk
                     ),
-                    modifier = Modifier.background(brush = RainbowNeon, shape = RainbowShape)
+                    modifier = Modifier.background(brush = MetallicSheen, shape = RainbowShape)
                 ) {
                     Text(stringResource(R.string.choose_backup_folder))
                 }
@@ -815,7 +828,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onOpenCleanup, border = NeonRainbowBorder) {
+                OutlinedButton(onClick = onOpenCleanup, border = MetallicBorder) {
                     Text(stringResource(R.string.cloud_cleanup))
                 }
                 if (restorable > 0) {
@@ -823,7 +836,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     OutlinedButton(
                         onClick = { runRestore() },
                         enabled = !restoring,
-                        border = NeonRainbowBorder
+                        border = MetallicBorder
                     ) {
                         Text(stringResource(R.string.restore_button))
                     }
@@ -841,7 +854,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                         containerColor = Color.Transparent,
                         contentColor = NeonInk
                     ),
-                    modifier = Modifier.background(brush = RainbowNeon, shape = RainbowShape)
+                    modifier = Modifier.background(brush = MetallicSheen, shape = RainbowShape)
                 ) {
                     Text(stringResource(R.string.choose_backup_folder))
                 }
@@ -851,7 +864,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                         BackupStore.clearTarget(context)
                         backupTarget = null
                     },
-                    border = NeonRainbowBorder
+                    border = MetallicBorder
                 ) {
                     Text(stringResource(R.string.remove_backup_target))
                 }
