@@ -57,6 +57,8 @@
     <string name="cloud_cleanup">Cloud-Speicher aufräumen</string>
     <string name="cloud_no_target">Kein Backup-Zielordner gewählt — erst in den Backup-Einstellungen einrichten.</string>
     <string name="cloud_empty">Im Scanbird-Ordner liegen keine Dateien.</string>
+    <string name="cloud_load_failed">Der Scanbird-Ordner in der Cloud ist nicht erreichbar — Internetverbindung oder Zielordner prüfen und erneut versuchen.</string>
+    <string name="retry">Erneut versuchen</string>
     <string name="cloud_delete_title">Aus der Cloud löschen?</string>
     <string name="cloud_delete_text">Die ausgewählten Dateien werden aus dem Scanbird-Ordner in der Cloud gelöscht. Die Scans auf dem Gerät bleiben erhalten.</string>
     <string name="cloud_deleted">Aus der Cloud gelöscht: %1$d</string>

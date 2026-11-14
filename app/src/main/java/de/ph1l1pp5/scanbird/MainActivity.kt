@@ -904,6 +904,7 @@ fun CloudCleanupScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var backupTarget by remember { mutableStateOf(SettingsStore(context).backupTreeUri) }
     var files by remember { mutableStateOf<List<BackupStore.BackupFile>?>(null) }
+    var loadFailed by remember { mutableStateOf(false) }
     var fileForRename by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
     var fileForDelete by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
     var confirmDeleteMany by remember { mutableStateOf(false) }
@@ -913,8 +914,18 @@ fun CloudCleanupScreen(onBack: () -> Unit) {
     LaunchedEffect(backupTarget, reloadTick) {
         if (backupTarget == null) {
             files = null
+            loadFailed = false
         } else {
+            // Erst null heisst hier: wird geladen. Bleibt die Antwort null,
+            // ist der Scanbird-Ordner nicht erreichbar — 0.5.9 zeigt dann
+            // statt des ewigen "Wird geladen" eine Fehlermeldung.
+            files = null
+            loadFailed = false
             files = withContext(Dispatchers.IO) { BackupStore.listBackupFiles(context) }
+            if (files == null) {
+                loadFailed = true
+                return@LaunchedEffect
+            }
             val ids = files.orEmpty().map { it.documentId }.toSet()
             selectedIds = selectedIds.intersect(ids)
         }
@@ -1034,10 +1045,28 @@ fun CloudCleanupScreen(onBack: () -> Unit) {
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    stringResource(R.string.pdf_loading),
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                if (loadFailed) {
+                    // 0.5.9: Der Scanbird-Ordner ist nicht erreichbar —
+                    // vorher stand hier endlos "Wird geladen".
+                    Text(
+                        stringResource(R.string.cloud_load_failed),
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 32.dp)
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = { reloadTick++ },
+                        border = NeonRainbowBorder
+                    ) {
+                        Text(stringResource(R.string.retry))
+                    }
+                } else {
+                    Text(
+                        stringResource(R.string.pdf_loading),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
         } else if (list.isEmpty()) {
             Column(
