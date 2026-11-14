@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Verlauf, Einstellungen, CloudSpeicher }
+private enum class Screen { Verlauf, Einstellungen }
 
 /** Signatur-Rahmen (0.5.3): Knöpfe im Pillen-Look. Seit 0.5.6 im Neon-Regenbogen
  *  statt Cyan — Regenbogen-Thermobecher-Feeling, diagonal von Pink nach Violett. */
@@ -148,11 +148,7 @@ fun ScanbirdApp() {
 
     when (screen) {
         Screen.Verlauf -> VerlaufScreen(onOpenSettings = { screen = Screen.Einstellungen })
-        Screen.Einstellungen -> EinstellungenScreen(
-            onBack = { screen = Screen.Verlauf },
-            onOpenCleanup = { screen = Screen.CloudSpeicher }
-        )
-        Screen.CloudSpeicher -> CloudCleanupScreen(onBack = { screen = Screen.Einstellungen })
+        Screen.Einstellungen -> EinstellungenScreen(onBack = { screen = Screen.Verlauf })
     }
 }
 
@@ -224,7 +220,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 
     /** Kern des Umbenennens (IO): Datei und Verlaufseintrag auf den neuen Titel ziehen. */
     suspend fun renameScanTo(scan: ScanEntity, newTitle: String): Boolean = withContext(Dispatchers.IO) {
-        val safeTitle = fileTitle(newTitle)
+        val safeTitle = BackupStore.fileTitle(newTitle)
         // Zeitstempel-Präfix bleibt — Sortierung läuft weiter über den Zeitstempel.
         // Separator "__" (ab 0.2.9); alte Namen nutzten "_".
         val base = scan.pdfFileName.removeSuffix(".pdf")
@@ -235,9 +231,8 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
         )
         if (actual != null) {
             dao.update(scan.copy(title = newTitle, pdfFileName = actual, backedUp = false))
-            // Alte Backup-Kopie entsorgen; die neue laedt beim naechsten
-            // Sicherungslauf unter ihrem neuen Namen hoch.
-            BackupStore.removeBackupName(context, scan.pdfFileName)
+            // Die neue Cloud-Kopie laedt beim naechsten Sicherungslauf unter
+            // ihrem neuen Namen hoch; die alte bleibt als Archiv stehen.
             true
         } else {
             false
@@ -689,7 +684,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
+fun EinstellungenScreen(onBack: () -> Unit) {
     // Gesten-Zurück: zurück in die Hauptansicht, nicht die App schließen.
     BackHandler(onBack = onBack)
     val context = LocalContext.current
@@ -699,25 +694,17 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
     var text by remember { mutableStateOf(settings.standardText) }
     var backupTarget by remember { mutableStateOf(settings.backupTreeUri) }
 
-    // Restore-Knopf nur zeigen, wenn der verbundene Scanbird-Ordner PDFs
-    // enthaelt, die die App noch nicht kennt — sonst verwirrt er nur (0.5.2).
-    var restorable by remember { mutableStateOf(0) }
     var restoring by remember { mutableStateOf(false) }
 
-    // Ziel-Check (0.5.15): Laesst sich der Scanbird-Ordner im Ziel nicht
-    // finden oder anlegen, steht das hier offen im Bild — kDrive-Nutzer
-    // muessen den Ordner direkt waehlen, und das sagt die App jetzt auch.
+    // Ziel-Check (0.5.15/0.5.20): Laesst sich der Wunschordner nicht
+    // abfragen, steht das hier offen im Bild.
     var targetProblem by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(backupTarget) {
-        if (backupTarget == null) {
-            restorable = 0
-            targetProblem = null
+        targetProblem = if (backupTarget == null) {
+            null
         } else {
-            targetProblem = withContext(Dispatchers.IO) {
-                BackupStore.resolveFolder(context).error
-            }
-            restorable = BackupStore.countRestorable(context, dao)
+            BackupStore.checkTarget(context)
         }
     }
 
@@ -738,15 +725,13 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
         }
     }
 
-    /** Aus der Cloud wiederherstellen (0.5.2): Scanbird-Ordner in den
-     *  Arbeitsordner ziehen, Verlaufseintraege anlegen. Still im Hintergrund. */
+    /** Aus der Cloud wiederherstellen (0.5.20): Jede PDF im Wunschordner mit
+     *  Scanbird-Stempel zurueckholen, die die App noch nicht kennt. */
     fun runRestore() {
         if (restoring) return
         restoring = true
         scope.launch {
             val count = BackupStore.restoreMissing(context, dao)
-            restorable = if (backupTarget == null) 0
-            else BackupStore.countRestorable(context, dao)
             restoring = false
             val msg = if (count == null) {
                 context.getString(R.string.cloud_restore_failed)
@@ -882,7 +867,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall
                 )
             } else {
-                // Ziel steht: Aufräumen und Restore obenauf, Rezept und
+                // Ziel steht: Cloud-App und Restore obenauf, Rezept und
                 // Wechsel-Knopf darunter — weniger wichtig, aber erreichbar.
                 Text(
                     stringResource(
@@ -892,18 +877,36 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onOpenCleanup, border = NeonRainbowBorder) {
-                    Text(stringResource(R.string.cloud_cleanup))
+                // 0.5.20: Ansehen und Loeschen in der Cloud-App — Loeschen und
+                // Oeffnen ueber SAF unterstuetzen manche Anbieter nicht.
+                val cloudLabel = BackupStore.cloudAppLabel(context)
+                OutlinedButton(
+                    onClick = {
+                        if (!BackupStore.openCloudApp(context)) {
+                            Toast.makeText(
+                                context,
+                                R.string.cloud_open_failed,
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    },
+                    border = NeonRainbowBorder
+                ) {
+                    Text(
+                        if (cloudLabel != null) {
+                            stringResource(R.string.cloud_open_app, cloudLabel)
+                        } else {
+                            stringResource(R.string.cloud_open_app_fallback)
+                        }
+                    )
                 }
-                if (restorable > 0) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { runRestore() },
-                        enabled = !restoring,
-                        border = NeonRainbowBorder
-                    ) {
-                        Text(stringResource(R.string.restore_button))
-                    }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { runRestore() },
+                    enabled = !restoring,
+                    border = NeonRainbowBorder
+                ) {
+                    Text(stringResource(R.string.restore_button))
                 }
                 Spacer(Modifier.height(24.dp))
                 Text(
@@ -939,417 +942,11 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
     }
 }
 
-/**
- * Cloud-Speicher (0.5.2): Der Scanbird-Ordner in der Cloud im Verlaufs-Look —
- * dunkle Pillen mit Neon-Rand, langes Drücken öffnet das bekannte Menü mit
- * Auswählen, Umbenennen, Löschen. Umbenennen zieht lokale Kopie und Verlauf
- * mit; Löschen trifft nur die Cloud — die Scans auf dem Gerät bleiben, und
- * Aufgeräumtes lädt bewusst nicht wieder hoch.
- */
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
-@Composable
-fun CloudCleanupScreen(onBack: () -> Unit) {
-    // Gesten-Zurück: erst die Auswahl verlassen, sonst zurück zu den
-    // Einstellungen — die App schließt hier nie (0.5.4).
-    var selectionMode by remember { mutableStateOf(false) }
-    var selectedIds by remember { mutableStateOf(setOf<String>()) }
-    BackHandler {
-        if (selectionMode) {
-            selectionMode = false
-            selectedIds = emptySet()
-        } else {
-            onBack()
-        }
-    }
-    val context = LocalContext.current
-    val dao = remember { AppDatabase.get(context).scanDao() }
-    val scope = rememberCoroutineScope()
-    var backupTarget by remember { mutableStateOf(SettingsStore(context).backupTreeUri) }
-    var files by remember { mutableStateOf<List<BackupStore.BackupFile>?>(null) }
-    var loadError by remember { mutableStateOf<String?>(null) }
-    var fileForRename by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
-    var fileForDelete by remember { mutableStateOf<BackupStore.BackupFile?>(null) }
-    var confirmDeleteMany by remember { mutableStateOf(false) }
-    var reloadTick by remember { mutableStateOf(0) }
-
-    // Ordnerinhalt frisch laden: beim Betreten und nach jeder Änderung.
-    LaunchedEffect(backupTarget, reloadTick) {
-        if (backupTarget == null) {
-            files = null
-            loadError = null
-        } else {
-            // Erst null heisst: wird geladen. Seit 0.5.10 nennt die Antwort
-            // bei Misserfolg den Schritt und Grund — Diagnose vom Geraet,
-            // nicht vom Raten.
-            files = null
-            loadError = null
-            val result = withContext(Dispatchers.IO) {
-                BackupStore.listBackupFiles(context)
-            }
-            files = result.files
-            loadError = result.error
-            if (files != null) {
-                val ids = files.orEmpty().map { it.documentId }.toSet()
-                selectedIds = selectedIds.intersect(ids)
-            }
-        }
-    }
-
-    /** Umbenennen in der Cloud: Cloud-Datei, lokale Kopie und Verlaufs-
-     *  eintrag ziehen alle mit, damit nichts auseinanderläuft. */
-    suspend fun cloudRenameTo(file: BackupStore.BackupFile, newTitle: String): Boolean =
-        withContext(Dispatchers.IO) {
-            val safeTitle = fileTitle(newTitle)
-            if (safeTitle.isBlank()) return@withContext false
-            // Zeitstempel-Präfix bleibt, wie im Verlauf beim Umbenennen.
-            val base = file.name.removeSuffix(".pdf")
-            val prefix = if (base.contains("__")) base.substringBefore("__")
-            else base.substringBefore('_')
-            val newFileName = prefix + "__" + safeTitle + ".pdf"
-            // Erst die Cloud — misslingt sie, bleibt alles beim Alten.
-            if (BackupStore.renameBackupFile(context, file.documentId, newFileName) == null) {
-                return@withContext false
-            }
-            // Dann lokale Kopie und Verlaufseintrag hinterherziehen.
-            val scan = dao.findByFile(file.name)
-            if (scan != null) {
-                val location = ScanStore.locate(context, file.name)
-                val localExists = ScanStore.openRead(context, location)?.let { pfd ->
-                    try { pfd.close(); true } catch (e: Exception) { false }
-                } ?: false
-                if (localExists) {
-                    ScanStore.rename(context, location, newFileName)
-                }
-                dao.update(scan.copy(title = newTitle, pdfFileName = newFileName, backedUp = true))
-            }
-            true
-        }
-
-    /** Löschen in der Cloud — Mehrfachauswahl und Einzelplatz gemeinsam. */
-    fun applyDeleteCloud(ids: List<String>) {
-        scope.launch {
-            val count = withContext(Dispatchers.IO) {
-                BackupStore.deleteBackupFiles(context, ids)
-            }
-            selectedIds = emptySet()
-            selectionMode = false
-            reloadTick++
-            Toast.makeText(
-                context,
-                context.getString(R.string.cloud_deleted, count),
-                Toast.LENGTH_SHORT
-            ).show()
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        if (selectionMode) {
-                            stringResource(R.string.selected_count, selectedIds.size)
-                        } else {
-                            stringResource(R.string.cloud_storage)
-                        }
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (selectionMode) {
-                            selectionMode = false
-                            selectedIds = emptySet()
-                        } else {
-                            onBack()
-                        }
-                    }) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back)
-                        )
-                    }
-                },
-                actions = {
-                    if (selectionMode) {
-                        IconButton(
-                            onClick = { confirmDeleteMany = true },
-                            enabled = selectedIds.isNotEmpty()
-                        ) {
-                            Icon(
-                                Icons.Filled.Delete,
-                                contentDescription = stringResource(R.string.delete_scan)
-                            )
-                        }
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        val list = files
-        if (backupTarget == null) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    stringResource(R.string.cloud_no_target),
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 32.dp)
-                )
-            }
-        } else if (list == null) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                if (loadError != null) {
-                    // 0.5.9: Der Scanbird-Ordner ist nicht erreichbar —
-                    // vorher stand hier endlos "Wird geladen".
-                    // 0.5.10: Darunter steht die Diagnose vom Geraet.
-                    Text(
-                        stringResource(R.string.cloud_load_failed),
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 32.dp)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        loadError ?: "",
-                        style = MaterialTheme.typography.bodySmall,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 32.dp)
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = { reloadTick++ },
-                        border = NeonRainbowBorder
-                    ) {
-                        Text(stringResource(R.string.retry))
-                    }
-                } else {
-                    Text(
-                        stringResource(R.string.pdf_loading),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-        } else if (list.isEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    stringResource(R.string.cloud_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 32.dp)
-                )
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-            ) {
-                items(list, key = { it.documentId }) { file ->
-                    var menuOpen by remember { mutableStateOf(false) }
-                    val isSelected = file.documentId in selectedIds
-                    Box {
-                        // Pille im Verlaufs-Stil: gleiche Optik, gleiche Gesten —
-                        // nur dass diese Liste in der Cloud lebt.
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 4.dp)
-                                .combinedClickable(
-                                    onClick = {
-                                        if (selectionMode) {
-                                            selectedIds = if (isSelected) {
-                                                selectedIds - file.documentId
-                                            } else {
-                                                selectedIds + file.documentId
-                                            }
-                                        }
-                                    },
-                                    onLongClick = { if (!selectionMode) menuOpen = true }
-                                )
-                                .border(
-                                    width = 2.dp,
-                                    brush = RainbowNeon,
-                                    shape = RoundedCornerShape(20.dp)
-                                )
-                                .padding(horizontal = 20.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (selectionMode) {
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = {
-                                        selectedIds = if (isSelected) {
-                                            selectedIds - file.documentId
-                                        } else {
-                                            selectedIds + file.documentId
-                                        }
-                                    }
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    BackupStore.titleFromFileName(file.name),
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                                Text(
-                                    formatDate(file.lastModified) + " · " +
-                                        formatSize(file.size),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                        DropdownMenu(
-                            expanded = menuOpen,
-                            onDismissRequest = { menuOpen = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.select)) },
-                                onClick = {
-                                    menuOpen = false
-                                    selectionMode = true
-                                    selectedIds = setOf(file.documentId)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.rename)) },
-                                onClick = {
-                                    menuOpen = false
-                                    fileForRename = file
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.delete_scan)) },
-                                onClick = {
-                                    menuOpen = false
-                                    fileForDelete = file
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    val fileToRename = fileForRename
-    if (fileToRename != null) {
-        var renameInput by remember {
-            mutableStateOf(BackupStore.titleFromFileName(fileToRename.name))
-        }
-        AlertDialog(
-            onDismissRequest = { fileForRename = null },
-            title = { Text(stringResource(R.string.save_title)) },
-            text = {
-                OutlinedTextField(
-                    value = renameInput,
-                    onValueChange = { renameInput = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val newTitle = renameInput.trim()
-                        .ifBlank { BackupStore.titleFromFileName(fileToRename.name) }
-                    fileForRename = null
-                    scope.launch {
-                        val ok = cloudRenameTo(fileToRename, newTitle)
-                        if (!ok) {
-                            Toast.makeText(
-                                context,
-                                R.string.cloud_rename_failed,
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                        reloadTick++
-                    }
-                }) {
-                    Text(stringResource(R.string.save))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { fileForRename = null }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
-        )
-    }
-
-    val fileToDelete = fileForDelete
-    if (fileToDelete != null) {
-        AlertDialog(
-            onDismissRequest = { fileForDelete = null },
-            title = { Text(stringResource(R.string.cloud_delete_title)) },
-            text = { Text(stringResource(R.string.cloud_delete_text)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    fileForDelete = null
-                    applyDeleteCloud(listOf(fileToDelete.documentId))
-                }) {
-                    Text(stringResource(R.string.delete_scan))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { fileForDelete = null }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
-        )
-    }
-
-    if (confirmDeleteMany) {
-        AlertDialog(
-            onDismissRequest = { confirmDeleteMany = false },
-            title = { Text(stringResource(R.string.cloud_delete_title)) },
-            text = { Text(stringResource(R.string.cloud_delete_text)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDeleteMany = false
-                    applyDeleteCloud(selectedIds.toList())
-                }) {
-                    Text(stringResource(R.string.delete_scan))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDeleteMany = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
-        )
-    }
-}
-
 private fun defaultTitle(): String =
     "Scan " + SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date())
 
 private fun formatDate(millis: Long): String =
     SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date(millis))
-
-/** Dateigrösse für die Cloud-Ansicht: MB ab einer Megabyte, sonst KB. */
-private fun formatSize(bytes: Long): String =
-    if (bytes >= 1024 * 1024) {
-        String.format(Locale.GERMANY, "%.1f MB", bytes / (1024.0 * 1024.0))
-    } else {
-        String.format(Locale.GERMANY, "%d KB", bytes / 1024)
-    }
 
 // Liefert bei Erfolg Dateinamen und Titel des neuen Scans zurück; sonst eine Klartext-Ursache.
 private suspend fun saveScan(
@@ -1412,15 +1009,17 @@ private suspend fun saveScan(
             polished.recycle()
         }
 
-        val safeFileTitle = fileTitle(title)
-        // Kurzer, sauberer Dateiname: keine Millisekunden-Ziffernwurst, keine Leerzeichen —
-        // lange Namen mit vielen Ziffern blockierten sonst Uploads und Teilen.
-        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.GERMANY).format(Date())
+        val safeFileTitle = BackupStore.fileTitle(title)
+        // Ein Zeistempel fuer alles (0.5.20): Dateiname, Datenbank-Eintrag und
+        // Scanbird-Stempel im PDF-Inneren tragen dieselben Millisekunden — so
+        // erkennt die Wiederherstellung auf einem neuen Geraet bekannte Scans.
+        val stampMs = System.currentTimeMillis()
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.GERMANY).format(Date(stampMs))
         val fileName = "Scan_" + stamp + "__" + safeFileTitle + ".pdf"
 
         val target = ScanStore.createPdf(context, fileName)
         try {
-            PdfWriter.writeTo(pages, target.stream)
+            PdfWriter.writeTo(pages, target.stream, title, stampMs)
             target.finish()
         } catch (e: Exception) {
             target.abandon()
@@ -1430,7 +1029,7 @@ private suspend fun saveScan(
         dao.insert(
             ScanEntity(
                 title = title,
-                createdAt = System.currentTimeMillis(),
+                createdAt = stampMs,
                 pdfFileName = fileName
             )
         )
@@ -1449,29 +1048,6 @@ private data class SaveOutcome(
     val fileName: String? = null,
     val title: String? = null
 )
-
-/**
- * Dateinamen-Feile: Umlaute deutsch transliterieren, Sonderzeichen raus, Ergebnis
- * reines ASCII. Umlaute im Dateinamen brachten sonst Uploads zum Straucheln —
- * im Verlauf steht der Titel trotzdem mit echten Umlauten.
- */
-private fun fileTitle(raw: String): String =
-    raw.replace("Ä", "Ae").replace("Ö", "Oe").replace("Ü", "Ue")
-        .replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
-        .replace("ß", "ss")
-        .replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
-        .replace(' ', '_')
-        .map { if (it.code in 32..126) it else '_' }
-        .joinToString("")
-        .let { cutAtWordBoundary(it, 40) }
-
-/** Kappung an der Wortgrenze: nie mitten im Wort abschneiden („…Kultur Ba“). */
-private fun cutAtWordBoundary(s: String, max: Int): String {
-    if (s.length <= max) return s
-    val cut = s.take(max)
-    val atWord = cut.lastIndexOf('_')
-    return if (atWord >= max / 2) cut.substring(0, atWord) else cut.trimEnd('_')
-}
 
 // JPEGs tragen die Drehung in den EXIF-Daten; BitmapFactory ignoriert sie, wir nicht.
 private fun applyExifRotation(path: String, bitmap: Bitmap): Bitmap {

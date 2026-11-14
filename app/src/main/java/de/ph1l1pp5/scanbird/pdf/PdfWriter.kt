@@ -3,6 +3,8 @@ package de.ph1l1pp5.scanbird.pdf
 import android.graphics.Bitmap
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -35,17 +37,21 @@ object PdfWriter {
         return Page(bitmap.width, bitmap.height, jpeg)
     }
 
-    /** Schreibt alle Seiten als ein gemeinsames PDF ins Ziel. Schliesst den Stream nicht. */
-    fun writeTo(pages: List<Page>, target: OutputStream) {
+    /** Schreibt alle Seiten als ein gemeinsames PDF ins Ziel. Schliesst den
+     *  Stream nicht. Seit 0.5.20 traegt die PDF einen Scanbird-Stempel im
+     *  Info-Objekt (Producer, CreationDate, Keywords, Title) — er macht die
+     *  Datei in der Cloud wiedererkennbar, egal wie sie dort heisst. */
+    fun writeTo(pages: List<Page>, target: OutputStream, title: String, stampMs: Long) {
         if (pages.isEmpty()) {
             throw IllegalArgumentException("PDF ohne Seiten")
         }
         val n = pages.size
+        val infoId = 3 + n * 3
         val pageWidth = A4_WIDTH_PX * PX_TO_PT
         val pageHeight = A4_HEIGHT_PX * PX_TO_PT
 
         val pdf = ByteArrayOutputStream()
-        val offsets = IntArray(2 + n * 3)
+        val offsets = IntArray(infoId)
         fun bytes(s: String) {
             pdf.write(s.toByteArray(Charsets.US_ASCII))
         }
@@ -55,6 +61,14 @@ object PdfWriter {
         }
 
         bytes("%PDF-1.4\n")
+        // Info-Objekt physisch zuerst: Der Stempel sitzt damit in den ersten
+        // Bytes der Datei — das Wiedererkennen muss nicht die ganze Datei lesen.
+        startObj(infoId)
+        bytes(
+            "<< /Producer (" + PdfMarker.PRODUCER + ") /CreationDate (D:" +
+                stampDate(stampMs) + ") /Keywords (SB" + stampMs +
+                ") /Title <" + PdfMarker.titleHex(title) + "> >>\nendobj\n"
+        )
         startObj(1)
         bytes("<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
         startObj(2)
@@ -102,12 +116,15 @@ object PdfWriter {
         }
 
         val xrefPos = pdf.size()
-        bytes("xref\n0 " + (3 + n * 3) + "\n")
+        bytes("xref\n0 " + (infoId + 1) + "\n")
         bytes("0000000000 65535 f \n")
-        for (i in 1..(2 + n * 3)) {
+        for (i in 1..infoId) {
             bytes(String.format(Locale.US, "%010d 00000 n \n", offsets[i - 1]))
         }
-        bytes("trailer\n<< /Size " + (3 + n * 3) + " /Root 1 0 R >>\nstartxref\n")
+        bytes(
+            "trailer\n<< /Size " + (infoId + 1) + " /Root 1 0 R /Info " + infoId +
+                " 0 R >>\nstartxref\n"
+        )
         bytes(xrefPos.toString())
         bytes("\n%EOF\n")
 
@@ -116,4 +133,7 @@ object PdfWriter {
     }
 
     private fun fmt(v: Float): String = String.format(Locale.US, "%.2f", v)
+
+    private fun stampDate(ms: Long): String =
+        SimpleDateFormat("yyyyMMddHHmmss", Locale.US).format(Date(ms))
 }

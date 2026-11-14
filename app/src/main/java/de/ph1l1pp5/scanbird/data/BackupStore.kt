@@ -4,27 +4,34 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import de.ph1l1pp5.scanbird.pdf.PdfMarker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.FileInputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Provider-agnostisches Backup ueber das Storage Access Framework (SAF):
- * Der Nutzer waehlt EINMAL einen Zielordner in einer beliebigen Cloud-App,
- * einem USB-Laufwerk oder aehnlichem — die App merkt sich die URI dauerhaft
- * und kopiert danach automatisch jede fertige PDF dorthin. Ohne Cloud-SDK,
- * ohne Account, ohne Internet-Berechtigung; die App kennt den Anbieter nicht.
- * Wechselt der Anbieter, wechselt nur der gewaehlte Ordner.
+ * Der Nutzer waehlt EINMAL einen Wunschordner in einer beliebigen Cloud-App,
+ * auf einem USB-Laufwerk oder aehnlichem — die App merkt sich die URI
+ * dauerhaft und kopiert danach automatisch jede fertige PDF hinein. Ohne
+ * Cloud-SDK, ohne Account, ohne Internet-Berechtigung; die App kennt den
+ * Anbieter nicht. Wechselt der Anbieter, wechselt nur der gewaehlte Ordner.
  *
- * Seit 0.5.12 liegt das Backup wieder IM festen Unterordner „Scanbird“ im
- * gewaehlten Ziel (oder direkt im Ziel, wenn dieses so heisst) — erkannt,
- * angelegt oder gemerkt. Gegen kDrives Aussetzer von 0.5.10 haertet die
- * Aufloesung ab: Die einmal gewonnene Dokument-ID wird gemerkt und im Alltag
- * direkt genutzt (keine Wurzel-Abfrage, kein Anlegen), und Kandidaten werden
- * nach Namen und Livetuechtigkeit geprueft statt nach MIME-Typ. „Aus Cloud
- * wiederherstellen“ zieht jede PDF dieses Ordners, die die App noch nicht
- * kennt, in den Arbeitsordner und legt Verlaufseintraege an — neues Geraet,
- * gleiche Liste.
+ * Seit 0.5.20 gilt das Wunschordner-Prinzip: Das gewaehlte Ziel IST das
+ * Backup — kein Scanbird-Unterordner, kein Anlegen, nichts aufzuloesen.
+ * Damit gibt es auch keine Test-Ordner oder Probe-Dateien mehr: Was Scanbird
+ * in die Cloud schreibt, sind ausschliesslich echte Scans. Die eigene PDF
+ * erkennt die Wiederherstellung am Scanbird-Stempel im Datei-Inneren
+ * (/Producer), unabhaengig vom Dateinamen — in der Cloud umbenannte Dateien
+ * bleiben auffindbar. Ansehen und Loeschen in der Cloud macht die zugehoerige
+ * Cloud-App (openCloudApp), denn Loeschen und Oeffnen ueber SAF unterstuetzen
+ * manche Anbieter (kDrive) nicht. Eine leere Ordnerabfrage kann dort auch
+ * gelogen sein, deshalb wiederholt listFolder leere Ergebnisse kurz — ganz
+ * ohne Schreib-Proben, die als Muell liegen bleiben koennten.
  *
  * Fehlverhalten ist bewusst STILL: Ist das Ziel nicht erreichbar (Cloud
  * offline, App deinstalliert), geschieht nichts — beim naechsten Scan oder
@@ -32,7 +39,7 @@ import java.io.FileInputStream
  */
 object BackupStore {
 
-    /** Eine Datei im Backup-Zielordner — Grundlage der Aufräum-Ansicht. */
+    /** Eine Datei im Zielordner. */
     data class BackupFile(
         val documentId: String,
         val name: String,
@@ -41,8 +48,9 @@ object BackupStore {
         val lastModified: Long
     )
 
-    /** Fester Ordnername im Ziel — das Wiedererkennungszeichen des Backups. */
-    const val FOLDER_NAME = "Scanbird"
+    /** Namens-Präfix der Cloud-Kopien — Kosmetik fuer Menschen im Zielordner.
+     *  Das Wiedererkennen laeuft ueber den Stempel, nicht ueber den Namen. */
+    const val CLOUD_PREFIX = "Scanbird — "
 
     /** Ordner-Picker: URI mitsamt dauerhaft haltbarer Berechtigung anfordern. */
     fun pickFolderIntent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -55,12 +63,10 @@ object BackupStore {
 
     fun target(context: Context): Uri? = SettingsStore(context).backupTreeUri
 
-    /** Lesbares Ziel-Etikett fuer die Einstellungen: der gewaehlte Ordner
-     *  mit seinem Scanbird-Unterordner (0.5.12). */
+    /** Lesbares Ziel-Etikett fuer die Einstellungen: der gewaehlte Ordner. */
     fun targetLabel(context: Context): String? {
         val uri = target(context) ?: return null
-        val name = folderName(context, uri)
-        return if (name == FOLDER_NAME) name else name + "/" + FOLDER_NAME
+        return folderName(context, uri)
     }
 
     /** Neues Ziel setzen: Berechtigung dauerhaft nehmen, das alte freigeben. */
@@ -85,8 +91,6 @@ object BackupStore {
             }
         }
         SettingsStore(context).backupTreeUri = uri
-        // Neues Ziel: die gemerkte Unterordner-ID gehoert zum alten Ziel.
-        SettingsStore(context).backupFolderId = null
     }
 
     /** Ziel entfernen: Berechtigung freigeben, Einstellung loeschen. */
@@ -103,16 +107,12 @@ object BackupStore {
             }
         }
         SettingsStore(context).backupTreeUri = null
-        SettingsStore(context).backupFolderId = null
     }
 
     /**
      * Echter Ordnername laut Anbieter (0.5.13): eine einzelne Dokument-Abfrage
-     * fragt COLUMN_DISPLAY_NAME direkt beim Provider. Zuvor wurde der Name aus
-     * der Dokument-ID erraten — kDrive-IDs tragen den Namen aber nicht, weshalb
-     * der direkt gewaehlte Scanbird-Ordner nicht erkannt und ein doppelter
-     * Unterordner angelegt wurde. Liefert null, wenn der Anbieter die Abfrage
-     * nicht unterstuetzt; dann greift der ID-Fallback.
+     * fragt COLUMN_DISPLAY_NAME direkt beim Provider. Liefert null, wenn der
+     * Anbieter die Abfrage nicht unterstuetzt; dann greift der ID-Fallback.
      */
     fun realDisplayName(context: Context, tree: Uri): String? = try {
         val docId = DocumentsContract.getTreeDocumentId(tree)
@@ -140,187 +140,54 @@ object BackupStore {
         return if (tail.isBlank()) id else tail
     }
 
-    /**
-     * Backup-Ordner aufloesen (0.5.12): Das Ziel IST wieder der gewaehlte
-     * Ordner PLUS fester "Scanbird"-Unterordner — erkannt, angelegt oder
-     * gemerkt. Zwei Haertungen gegen kDrives Aussetzer von 0.5.10:
-     * 1. Die einmal aufgeloeste Dokument-ID wird gemerkt; der Alltagsbetrieb
-     *    fragt sie direkt ab — keine Wurzel-Abfrage, kein Anlegen.
-     * 2. Bei der Suche zaehlt der NAME, nicht der MIME-Typ; ein Treffer muss
-     *    sich listen lassen, sonst ist er kein Ordner. Vor jedem Anlegen
-     *    beweist ein Wegwerf-Ordner, dass die Abfrage des Anbieters ehrlich
-     *    ist — blindes Anlegen waere die stille Duplikat-Falle.
-     * Liefert die Dokument-ID oder im Fehlerfall eine Diagnose.
-     */
-    data class ResolvedFolder(val documentId: String?, val error: String?)
+    /** Dokument-ID des Ziels: der gewaehlte Ordner selbst (0.5.20). */
+    fun targetFolderId(context: Context): String? =
+        target(context)?.let { DocumentsContract.getTreeDocumentId(it) }
 
-    fun resolveFolder(context: Context): ResolvedFolder {
-        val tree = target(context)
-            ?: return ResolvedFolder(null, "Kein Zielordner gespeichert.")
-        val settings = SettingsStore(context)
-        // 1. Der gewaehlte Ordner heisst selbst "Scanbird": direkt nutzen —
-        //    mit echtem Namen laut Anbieter (0.5.13), nicht geraten aus der
-        //    ID, sonst entsteht hier ein Scanbird im Scanbird.
-        if (folderName(context, tree) == FOLDER_NAME) {
-            return ResolvedFolder(
-                DocumentsContract.getTreeDocumentId(tree), null
-            )
+    /**
+     * Ziel-Check fuer die Einstellungen: Laesst sich der Zielordner abfragen?
+     * Nur harte Fehler (offline, Berechtigung weg, Anbieter fehlt) werden
+     * gemeldet — ein lesbares Ziel ist ok, auch wenn es leer ist: Leere kann
+     * echt sein, und gelogenes Leere ist harmlos, seit die App nichts mehr
+     * anlegt und das Wiedererkennen im Datei-Inneren laeuft.
+     */
+    suspend fun checkTarget(context: Context): String? = withContext(Dispatchers.IO) {
+        val tree = target(context) ?: return@withContext null
+        val folderId = targetFolderId(context) ?: return@withContext null
+        val files = listFolder(context, tree, folderId, attempts = 3)
+        if (files == null) {
+            "Zielordner-Abfrage fehlgeschlagen — Internetverbindung oder Berechtigung prüfen."
+        } else {
+            null
         }
-        // 2. Gemerkte Unterordner-ID: laesst sich der Ordner noch listen,
-        //    lebt er — dann direkt nutzen, ganz ohne Wurzel-Abfrage.
-        val cachedId = settings.backupFolderId
-        if (cachedId != null && settings.backupFolderTree == tree.toString()) {
-            val children = try {
-                queryFiles(context, tree, cachedId)
-            } catch (e: Exception) {
-                settings.backupFolderId = null
-                null
-            }
-            if (children != null) {
-                // Ehrlichkeits-Probe (0.5.18): Eine LEERE Liste kann echt
-                // oder gelogen sein — manche Anbieter (kDrive) werfen nicht,
-                // sie zeigen nur nichts. Die Probe entscheidet.
-                if (children.isNotEmpty() ||
-                    folderListingHonest(context, tree, cachedId)
-                ) {
-                    return ResolvedFolder(cachedId, null)
-                }
-                settings.backupFolderId = null
-            }
-        }
-        // 3. Volle Aufloesung: Kandidaten nach Namen suchen, jeden als
-        //    Ordner pruefen, sonst anlegen. Nur Erfolg wird gemerkt.
-        val rootId = DocumentsContract.getTreeDocumentId(tree)
-        val candidates = try {
-            queryFiles(context, tree, rootId).filter { it.name == FOLDER_NAME }
-        } catch (e: Exception) {
-            return ResolvedFolder(
-                null,
-                "Wurzel-Abfrage: ${e.javaClass.simpleName}: ${e.message}"
-            )
-        }
-        for (candidate in candidates) {
-            val children = try {
-                queryFiles(context, tree, candidate.documentId)
-            } catch (e: Exception) {
-                continue
-            }
-            // Leere Liste ohne Inhalt: echt oder gelogen — Probe (0.5.18).
-            if (children.isEmpty() &&
-                !folderListingHonest(context, tree, candidate.documentId)
-            ) {
-                continue
-            }
-            settings.backupFolderTree = tree.toString()
-            settings.backupFolderId = candidate.documentId
-            return ResolvedFolder(candidate.documentId, null)
-        }
-        if (candidates.isNotEmpty()) {
-            return ResolvedFolder(
-                null,
-                "Der Scanbird-Ordner im Ziel lässt sich nicht zuverlässig " +
-                    "lesen — bitte den Scanbird-Ordner direkt als Ziel auswählen."
-            )
-        }
-        // Blindheits-Test (0.5.17): Ist der Scanbird-Ordner laut Abfrage
-        // nicht vorhanden, wird vor dem Anlegen ein Wegwerf-Ordner gelegt.
-        // Taucht er NICHT in der Abfrage auf, luegt der Anbieter — dann
-        // waere auch ein bestehender Scanbird-Ordner unsichtbar, und blindes
-        // Anlegen erzeugt stille Duplikate (kDrive macht genau das). Finger
-        // weg: Der Nutzer waehlt den Ordner besser direkt.
-        val probeName = ".scanbird-test-" + System.currentTimeMillis()
-        val probe = try {
-            DocumentsContract.createDocument(
-                context.contentResolver,
-                DocumentsContract.buildDocumentUriUsingTree(tree, rootId),
-                DocumentsContract.Document.MIME_TYPE_DIR,
-                probeName
-            )
-        } catch (e: Exception) {
-            return ResolvedFolder(
-                null,
-                "Ordner anlegen: ${e.javaClass.simpleName}: ${e.message}"
-            )
-        }
-        if (probe == null) {
-            return ResolvedFolder(
-                null,
-                "Ordner anlegen: createDocument lieferte null — existiert " +
-                    "\"$FOLDER_NAME\" schon? Dann ihn direkt als Ziel whlen."
-            )
-        }
-        val probeVisible = try {
-            queryFiles(context, tree, rootId).any { it.name == probeName }
-        } catch (e: Exception) {
-            false
-        }
-        try {
-            context.contentResolver.delete(probe, null, null)
-        } catch (e: Exception) {
-        }
-        if (!probeVisible) {
-            return ResolvedFolder(
-                null,
-                "Der Zielordner lässt sich nicht zuverlässig auslesen — " +
-                    "bitte den Scanbird-Ordner direkt als Ziel auswählen."
-            )
-        }
-        // Abfrage ist ehrlich, es gab wirklich keinen Scanbird-Ordner:
-        // jetzt darf er angelegt werden.
-        val created = try {
-            DocumentsContract.createDocument(
-                context.contentResolver,
-                DocumentsContract.buildDocumentUriUsingTree(tree, rootId),
-                DocumentsContract.Document.MIME_TYPE_DIR,
-                FOLDER_NAME
-            )
-        } catch (e: Exception) {
-            return ResolvedFolder(
-                null,
-                "Ordner anlegen: ${e.javaClass.simpleName}: ${e.message}"
-            )
-        }
-        if (created == null) {
-            return ResolvedFolder(
-                null,
-                "Ordner anlegen: createDocument lieferte null — existiert " +
-                    "\"$FOLDER_NAME\" schon? Dann ihn direkt als Ziel whlen."
-            )
-        }
-        val createdId = DocumentsContract.getDocumentId(created)
-        settings.backupFolderTree = tree.toString()
-        settings.backupFolderId = createdId
-        return ResolvedFolder(createdId, null)
     }
 
     /**
-     * Rueckstand sichern: alle Scans ohne Backup-Kopie in den Backup-Ordner
-     * ziehen. Kein Ziel oder lesbarer Zielordner → still ausfallen; der
-     * naechste Scan oder Start versucht es wieder. Liefert true, wenn der
-     * ganze Rueckstand gesichert ist.
+     * Rueckstand sichern: alle Scans ohne Backup-Kopie in den Wunschordner
+     * ziehen, unter dem Scanbird-Namen mit dem aktuellen Titel. Kein Ziel
+     * oder lesbarer Zielordner → still ausfallen; der naechste Scan oder
+     * Start versucht es wieder. Liefert true, wenn der ganze Rueckstand
+     * gesichert ist.
      */
     suspend fun ensureBackedUp(context: Context, dao: ScanDao): Boolean =
         withContext(Dispatchers.IO) {
             val tree = target(context) ?: return@withContext false
-            // 0.5.12: Erkannter oder angelegter Scanbird-Unterordner —
-            // im Alltag direkt ueber die gemerkte ID.
-            val folderId = resolveFolder(context).documentId
-                ?: return@withContext false
+            val folderId = targetFolderId(context) ?: return@withContext false
             try {
-                val existing = queryFiles(context, tree, folderId)
-                    .mapTo(HashSet()) { it.name }
+                val existing = listFolder(context, tree, folderId, attempts = 2)
+                    ?.mapTo(HashSet()) { it.name } ?: return@withContext false
                 for (scan in dao.findNotBackedUp()) {
-                    val fileName = scan.pdfFileName
-                    if (fileName in existing) {
+                    val cloudName = cloudFileName(scan.title)
+                    if (cloudName in existing) {
                         dao.markBackedUp(scan.id)
                         continue
                     }
-                    val pfd = ScanStore.openRead(context, ScanStore.locate(context, fileName))
+                    val pfd = ScanStore.openRead(context, ScanStore.locate(context, scan.pdfFileName))
                     if (pfd == null) continue
                     val created = DocumentsContract.createDocument(
                         context.contentResolver,
                         DocumentsContract.buildDocumentUriUsingTree(tree, folderId),
-                        "application/pdf", fileName
+                        "application/pdf", cloudName
                     )
                     if (created == null) return@withContext false
                     var copyOk = false
@@ -346,26 +213,28 @@ object BackupStore {
         }
 
     /**
-     * Wiederherstellen (0.5.2): Jede PDF aus dem Backup-Ordner, die die App
-     * noch nicht kennt, in den Arbeitsordner kopieren und als Verlaufseintrag
-     * anlegen — neues Geraet, verbundene Cloud, gleiche Liste. Der Vermerk
-     * backedUp steht ab sofort auf wahr, die Datei ist ja schon in der Cloud.
+     * Wiederherstellen (0.5.20): Jede PDF im Wunschordner, die den
+     * Scanbird-Stempel traegt und der App noch nicht bekannt ist, in den
+     * Arbeitsordner ziehen und als Verlaufs-Eintrag anlegen — neues Geraet,
+     * verbundene Cloud, gleiche Liste. Der Stempel entscheidet, nicht der
+     * Name: In der Cloud umbenannte Dateien bleiben auffindbar, fremde PDFs
+     * bleiben draussen. Identitaet ist der Zeistempel (SB<ms>) aus dem
+     * Stempel — schon bekannte Scans werden uebersprungen.
      * Liefert die Zahl der zurueckgeholten Scans; null bei Fehler.
      */
     suspend fun restoreMissing(context: Context, dao: ScanDao): Int? =
         withContext(Dispatchers.IO) {
             val tree = target(context) ?: return@withContext null
-            val folderId = resolveFolder(context).documentId
-                ?: return@withContext null
+            val folderId = targetFolderId(context) ?: return@withContext null
             try {
-                val known = dao.allFileNames().toHashSet()
+                val files = listFolder(context, tree, folderId, attempts = 5)
+                    ?: return@withContext null
                 var restored = 0
-                for (file in queryFiles(context, tree, folderId)) {
-                    if (file.name !in known &&
-                        file.name.endsWith(".pdf", ignoreCase = true)
-                    ) {
-                        if (restoreOne(context, tree, file, dao)) restored++
-                    }
+                for (file in files) {
+                    if (!file.name.endsWith(".pdf", ignoreCase = true)) continue
+                    val marker = readMarker(context, tree, file.documentId) ?: continue
+                    if (dao.countByCreatedAt(marker.stampMs) > 0) continue
+                    if (restoreOne(context, tree, file, marker, dao)) restored++
                 }
                 restored
             } catch (e: Exception) {
@@ -373,32 +242,28 @@ object BackupStore {
             }
         }
 
-    /** Zahl wiederherstellbarer PDFs — steuert, ob der Restore-Knopf erscheint. */
-    suspend fun countRestorable(context: Context, dao: ScanDao): Int =
-        withContext(Dispatchers.IO) {
-            val tree = target(context) ?: return@withContext 0
-            val folderId = resolveFolder(context).documentId
-                ?: return@withContext 0
-            try {
-                val known = dao.allFileNames().toHashSet()
-                queryFiles(context, tree, folderId).count {
-                    it.name !in known && it.name.endsWith(".pdf", ignoreCase = true)
-                }
-            } catch (e: Exception) {
-                0
-            }
-        }
-
-    /** Eine Cloud-PDF in den Arbeitsordner ziehen und eintragen. */
+    /** Eine erkannte Cloud-PDF in den Arbeitsordner ziehen und eintragen. */
     private suspend fun restoreOne(
         context: Context,
         tree: Uri,
         file: BackupFile,
+        marker: PdfMarker.Marker,
         dao: ScanDao
     ): Boolean {
+        // Titel-Quelle: Der Cloud-Name traegt den aktuellen Titel (Uploads
+        // laufen unter ihm); fehlt das Muster — etwa nach Umbenennen in der
+        // Cloud — greift der Titel aus dem Stempel, letzter Fallback der Name.
+        val title = if (file.name.startsWith(CLOUD_PREFIX)) {
+            titleFromFileName(file.name.removePrefix(CLOUD_PREFIX))
+        } else {
+            marker.title ?: titleFromFileName(file.name)
+        }
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.GERMANY)
+            .format(Date(marker.stampMs))
+        val fileName = "Scan_" + stamp + "__" + fileTitle(title) + ".pdf"
         val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, file.documentId)
         val targetPdf = try {
-            ScanStore.createPdf(context, file.name)
+            ScanStore.createPdf(context, fileName)
         } catch (e: Exception) {
             return false
         }
@@ -417,13 +282,9 @@ object BackupStore {
         try { targetPdf.finish() } catch (e: Exception) { }
         dao.insert(
             ScanEntity(
-                title = titleFromFileName(file.name),
-                createdAt = if (file.lastModified > 0) {
-                    file.lastModified
-                } else {
-                    System.currentTimeMillis()
-                },
-                pdfFileName = file.name,
+                title = title,
+                createdAt = marker.stampMs,
+                pdfFileName = fileName,
                 backedUp = true
             )
         )
@@ -431,108 +292,62 @@ object BackupStore {
     }
 
     /**
-     * Alte Backup-Kopie nach einer Umbenennung aus dem Scanbird-Ordner
-     * entfernen, falls vorhanden — so bleibt der Ordner frei von Rumpelkopien,
-     * und die Datei wandert beim naechsten Sicherungslauf unter ihrem neuen
-     * Namen hoch.
+     * Cloud-App des Ziels oeffnen (0.5.20): Ansehen und Loeschen laufen dort
+     * nativ — Loeschen und Oeffnen ueber SAF sind bei manchen Anbietern
+     * kaputt, in der Cloud-App funktioniert beides. Aus der Ziel-URI folgt
+     * der SAF-Provider, aus ihm das App-Paket. Fallback: die System-
+     * Ordneransicht, die zuverlaessig anzeigt. Liefert false, wenn beides
+     * misslingt.
      */
-    fun removeBackupName(context: Context, fileName: String) {
-        val tree = target(context) ?: return
-        val folderId = resolveFolder(context).documentId ?: return
+    fun openCloudApp(context: Context): Boolean {
+        val tree = target(context) ?: return false
         try {
-            for (child in queryFiles(context, tree, folderId)) {
-                if (child.name == fileName) {
-                    val docUri = DocumentsContract.buildDocumentUriUsingTree(
-                        tree, child.documentId
-                    )
-                    try { context.contentResolver.delete(docUri, null, null) } catch (e: Exception) { }
-                    break
+            val pm = context.packageManager
+            val provider = tree.authority?.let { pm.resolveContentProvider(it, 0) }
+            if (provider != null) {
+                val launch = pm.getLaunchIntentForPackage(provider.packageName)
+                if (launch != null) {
+                    context.startActivity(launch)
+                    return true
                 }
             }
         } catch (e: Exception) {
         }
-    }
-
-    /**
-     * Alle Dateien im Backup-Zielordner, neueste zuerst — die Aufräum-Ansicht in
-     * den Einstellungen. Seit 0.5.10 mit Diagnose: Schlägt ein Schritt fehl,
-     * nennt error den Schritt samt Ausnahme — statt null und Stille.
-     */
-    data class ListResult(
-        val files: List<BackupFile>?,
-        val error: String?
-    )
-
-    fun listBackupFiles(context: Context): ListResult {
-        val tree = target(context)
-            ?: return ListResult(null, "Kein Zielordner gespeichert.")
-        // 0.5.12: Auflösung über resolveFolder (gemerkte ID im Alltag), dann
-        // nur PDFs listen — der Aufräum-Bildschirm gehört den Scans, nicht
-        // dem sonstigen Inhalt der Cloud.
-        val resolved = resolveFolder(context)
-        if (resolved.documentId == null) {
-            return ListResult(null, resolved.error)
-        }
         return try {
-            ListResult(
-                queryFiles(context, tree, resolved.documentId)
-                    .filter { it.name.endsWith(".pdf", ignoreCase = true) },
-                null
-            )
-        } catch (e: Exception) {
-            ListResult(
-                null,
-                "Ordnerinhalt-Abfrage: ${e.javaClass.simpleName}: ${e.message}"
-            )
-        }
-    }
-
-    /**
-     * Dateien im Scanbird-Ordner loeschen (Cloud-Aufräumen). Das Backup ist
-     * danach bewusst weg: Aufräumen heisst NICHT beim naechsten Lauf wieder
-     * hochladen — der backedUp-Vermerk in der Datenbank bleibt unberuehrt.
-     * Die Scans auf dem Geraet bleiben immer erhalten. Liefert die Zahl der
-     * geloeschten Dateien.
-     */
-    fun deleteBackupFiles(context: Context, documentIds: List<String>): Int {
-        val tree = target(context) ?: return 0
-        var deleted = 0
-        for (id in documentIds) {
-            try {
-                val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
-                if (context.contentResolver.delete(docUri, null, null) > 0) deleted++
-            } catch (e: Exception) {
+            val docId = DocumentsContract.getTreeDocumentId(tree)
+            val view = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(
+                    DocumentsContract.buildDocumentUriUsingTree(tree, docId),
+                    DocumentsContract.Document.MIME_TYPE_DIR
+                )
             }
+            context.startActivity(view)
+            true
+        } catch (e: Exception) {
+            false
         }
-        return deleted
     }
 
-    /**
-     * Umbenennen in der Cloud (Aufräum-Ansicht). Liefert den neuen Namen oder
-     * null, wenn der Anbieter das Umbenennen nicht unterstuetzt oder es
-     * misslingt.
-     */
-    fun renameBackupFile(
-        context: Context,
-        documentId: String,
-        newFileName: String
-    ): String? {
+    /** App-Label des Cloud-Anbieters (fuer den Knopf-Text). */
+    fun cloudAppLabel(context: Context): String? {
         val tree = target(context) ?: return null
         return try {
-            val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, documentId)
-            val renamed = DocumentsContract.renameDocument(
-                context.contentResolver, docUri, newFileName
-            )
-            if (renamed != null) newFileName else null
+            val pm = context.packageManager
+            val provider = tree.authority?.let { pm.resolveContentProvider(it, 0) }
+                ?: return null
+            pm.getApplicationInfo(provider.packageName, 0).loadLabel(pm).toString()
         } catch (e: Exception) {
             null
         }
     }
 
+    /** Cloud-Dateiname eines Scans: Scanbird-Rahmen um den feilen Titel. */
+    fun cloudFileName(title: String): String = CLOUD_PREFIX + fileTitle(title) + ".pdf"
+
     /**
-     * Anzeige-Titel aus dem Backup-Dateinamen: Zeitstempel-Präfix abtrennen,
-     * Unterstriche zu Leerzeichen machen — so sieht die Cloud-Liste aus wie
-     * der Verlauf.
+     * Anzeige-Titel aus einem Dateinamen: Zeitstempel-Präfix abtrennen,
+     * Unterstriche zu Leerzeichen machen — so sieht die Liste aus wie der
+     * Verlauf.
      */
     fun titleFromFileName(name: String): String {
         val base = name.removeSuffix(".pdf")
@@ -541,37 +356,62 @@ object BackupStore {
         return if (title.isBlank()) name else title
     }
 
-    /** Ehrlichkeits-Probe (0.5.18): Eine Wegwerf-Datei im Ordner anlegen —
-     *  taucht sie in der Auflistung NICHT auf, luegt der Anbieter: Eine
-     *  leere Liste bedeutet dann nichts, und die PDFs im Ordner waeren
-     *  fuer Aufraeumen und Wiederherstellen unsichtbar (kDrive-Fall). */
-    private fun folderListingHonest(
+    /**
+     * Dateinamen-Feile: Umlaute deutsch transliterieren, Sonderzeichen raus,
+     * Ergebnis reines ASCII. Umlaute im Dateinamen brachten sonst Uploads zum
+     * Straucheln — im Verlauf steht der Titel trotzdem mit echten Umlauten.
+     */
+    fun fileTitle(raw: String): String =
+        raw.replace("Ä", "Ae").replace("Ö", "Oe").replace("Ü", "Ue")
+            .replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
+            .replace("ß", "ss")
+            .replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
+            .replace(' ', '_')
+            .map { if (it.code in 32..126) it else '_' }
+            .joinToString("")
+            .let { cutAtWordBoundary(it, 40) }
+
+    /** Kappung an der Wortgrenze: nie mitten im Wort abschneiden. */
+    private fun cutAtWordBoundary(s: String, max: Int): String {
+        if (s.length <= max) return s
+        val cut = s.take(max)
+        val atWord = cut.lastIndexOf('_')
+        return if (atWord >= max / 2) cut.substring(0, atWord) else cut.trimEnd('_')
+    }
+
+    /** Scanbird-Stempel aus einer Datei im Ziel lesen (null: nicht unserer). */
+    private fun readMarker(context: Context, tree: Uri, documentId: String): PdfMarker.Marker? {
+        val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, documentId)
+        return try {
+            context.contentResolver.openInputStream(docUri)?.use { input ->
+                PdfMarker.readFrom(input)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Ordnerinhalt mit Wiederholungen: Manche Anbieter (kDrive) liefern
+     * gelegentlich still eine leere Liste — dann kurz warten und nochmal,
+     * erst das letzte (leere) Ergebnis gilt. Liefert null, wenn jeder
+     * Versuch eine Ausnahme war (hartes Versagen, z. B. offline).
+     */
+    private suspend fun listFolder(
         context: Context,
         tree: Uri,
-        folderId: String
-    ): Boolean {
-        val probeName = ".scanbird-probe-" + System.currentTimeMillis()
-        val probe = try {
-            DocumentsContract.createDocument(
-                context.contentResolver,
-                DocumentsContract.buildDocumentUriUsingTree(tree, folderId),
-                "text/plain",
-                probeName
-            )
-        } catch (e: Exception) {
-            return false
+        folderId: String,
+        attempts: Int
+    ): List<BackupFile>? {
+        for (attempt in 0 until attempts) {
+            if (attempt > 0) delay(1200)
+            try {
+                val files = queryFiles(context, tree, folderId)
+                if (files.isNotEmpty() || attempt == attempts - 1) return files
+            } catch (e: Exception) {
+            }
         }
-        if (probe == null) return false
-        val visible = try {
-            queryFiles(context, tree, folderId).any { it.name == probeName }
-        } catch (e: Exception) {
-            false
-        }
-        try {
-            context.contentResolver.delete(probe, null, null)
-        } catch (e: Exception) {
-        }
-        return visible
+        return null
     }
 
     /** Kinder eines Ordners im Ziel: alle Dokumente mit Name, Typ, Groesse,

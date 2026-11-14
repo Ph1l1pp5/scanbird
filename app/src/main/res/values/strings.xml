@@ -49,22 +49,15 @@
     <string name="backup">Backup</string>
     <string name="backup_desc">Jede fertige PDF wird automatisch in den gewählten Zielordner kopiert — etwa in einer Cloud-App. Ohne Ziel: kein Backup.</string>
     <string name="backup_target_set">Ziel: %1$s</string>
-    <string name="backup_target_problem">Das gewählte Ziel ist nicht einsatzbereit — bitte den Scanbird-Ordner direkt als Ziel auswählen.</string>
+    <string name="backup_target_problem">Das gewählte Ziel ist derzeit nicht erreichbar — bitte die Internetverbindung prüfen oder den Zielordner erneut wählen.</string>
     <string name="backup_target_missing">Noch kein Zielordner gewählt.</string>
     <string name="choose_backup_folder">Zielordner wählen</string>
-    <string name="backup_hint">Einrichtung in 3 Schritten:\n1. Im Auswahldialog oben links auf ☰ tippen.\n2. Cloud-App antippen (z. B. kDrive).\n3. Ist der Ordner „Scanbird“ bereits vorhanden, bitte direkt auswählen. Fehlt er: gewünschtes Ziel auswählen — Scanbird legt den Ordner dort selbst an.\nAb dann landet jeder Scan automatisch dort.</string>
+    <string name="backup_hint">Einrichtung in 3 Schritten:\n1. Im Auswahldialog oben links auf ☰ tippen.\n2. Cloud-App antippen (z. B. kDrive).\n3. Wunschordner auswählen.\nAb dann landet jeder Scan automatisch dort.</string>
     <string name="remove_backup_target">Ziel entfernen</string>
-    <string name="cloud_storage">Cloud-Speicher</string>
-    <string name="cloud_cleanup">Cloud-Speicher aufräumen</string>
-    <string name="cloud_no_target">Kein Backup-Zielordner gewählt — erst in den Backup-Einstellungen einrichten.</string>
-    <string name="cloud_empty">Im Backup-Ordner liegen keine Dateien.</string>
-    <string name="cloud_load_failed">Der Backup-Ordner in der Cloud ist nicht erreichbar — Internetverbindung oder Zielordner prüfen und erneut versuchen.</string>
-    <string name="retry">Erneut versuchen</string>
-    <string name="cloud_delete_title">Aus der Cloud löschen?</string>
-    <string name="cloud_delete_text">Die ausgewählten Dateien werden aus dem Backup-Ordner in der Cloud gelöscht. Die Scans auf dem Gerät bleiben erhalten.</string>
-    <string name="cloud_deleted">Aus der Cloud gelöscht: %1$d</string>
+    <string name="cloud_open_app">%1$s öffnen</string>
+    <string name="cloud_open_app_fallback">Cloud-App öffnen</string>
+    <string name="cloud_open_failed">Die Cloud-App ließ sich nicht öffnen — bitte den Zielordner prüfen.</string>
     <string name="restore_button">Aus Cloud wiederherstellen</string>
     <string name="cloud_restored">Aus der Cloud wiederhergestellt: %1$d Scans</string>
     <string name="cloud_restore_failed">Wiederherstellen fehlgeschlagen — ist der Zielordner erreichbar?</string>
-    <string name="cloud_rename_failed">In der Cloud umbenennen fehlgeschlagen.</string>
 </resources>

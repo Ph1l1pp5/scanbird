@@ -22,6 +22,10 @@ interface ScanDao {
     @Query("SELECT pdfFileName FROM scans")
     suspend fun allFileNames(): List<String>
 
+    /** Scans mit diesem Zeistempel (SB-Stempel im PDF) — Restore-Duplikatschutz. */
+    @Query("SELECT COUNT(*) FROM scans WHERE createdAt = :ms")
+    suspend fun countByCreatedAt(ms: Long): Int
+
     @Query("SELECT * FROM scans WHERE backedUp = 0 ORDER BY createdAt ASC")
     suspend fun findNotBackedUp(): List<ScanEntity>
 
