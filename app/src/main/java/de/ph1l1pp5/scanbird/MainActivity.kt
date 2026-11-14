@@ -39,6 +39,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -107,6 +109,11 @@ private enum class Screen { Verlauf, Einstellungen, CloudSpeicher }
 
 /** Signatur-Rahmen (0.5.3): Knöpfe im Pillen-Look — Neon-Cyan-Rand wie im Verlauf. */
 private val NeonCyanBorder = BorderStroke(2.dp, Color(0xFF00FFFF).copy(alpha = 0.55f))
+
+/** 0.5.5: Der Zielordner-Knopf ist komplett Neon-Cyan gefüllt, die Schrift
+ *  dunkle Tinte — auf Cyan gut lesbar und nicht mehr grün. */
+private val NeonCyan = Color(0xFF00FFFF)
+private val CyanInk = Color(0xFF00333B)
 
 @Composable
 fun ScanbirdApp() {
@@ -769,9 +776,12 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(
+                Button(
                     onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) },
-                    border = NeonCyanBorder
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NeonCyan,
+                        contentColor = CyanInk
+                    )
                 ) {
                     Text(stringResource(R.string.choose_backup_folder))
                 }
@@ -810,9 +820,12 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(
+                Button(
                     onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) },
-                    border = NeonCyanBorder
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NeonCyan,
+                        contentColor = CyanInk
+                    )
                 ) {
                     Text(stringResource(R.string.choose_backup_folder))
                 }
