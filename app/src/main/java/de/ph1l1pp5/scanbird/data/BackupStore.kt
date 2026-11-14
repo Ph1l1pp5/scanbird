@@ -16,14 +16,15 @@ import java.io.FileInputStream
  * ohne Account, ohne Internet-Berechtigung; die App kennt den Anbieter nicht.
  * Wechselt der Anbieter, wechselt nur der gewaehlte Ordner.
  *
- * Seit 0.5.11 ist der GEWAEHLTE Ordner selbst das Backup-Verzeichnis — kein
- * Unterordner-Suchen und kein automatisches Anlegen mehr, denn genau dort
- * scheiterte kDrive regelmaessig (createDocument null bei bestehendem Ordner).
- * Wer den bisherigen „Scanbird“-Ordner als Ziel waehlt, behaelt alles: Die
- * App arbeitet ab sofort direkt mit dem gewaehlten Ordner. „Aus Cloud
- * wiederherstellen“ zieht jede PDF des Ordners, die die App noch nicht kennt,
- * in den Arbeitsordner und legt Verlaufseintraege an — neues Geraet, gleiche
- * Liste.
+ * Seit 0.5.12 liegt das Backup wieder IM festen Unterordner „Scanbird“ im
+ * gewaehlten Ziel (oder direkt im Ziel, wenn dieses so heisst) — erkannt,
+ * angelegt oder gemerkt. Gegen kDrives Aussetzer von 0.5.10 haertet die
+ * Aufloesung ab: Die einmal gewonnene Dokument-ID wird gemerkt und im Alltag
+ * direkt genutzt (keine Wurzel-Abfrage, kein Anlegen), und Kandidaten werden
+ * nach Namen und Livetuechtigkeit geprueft statt nach MIME-Typ. „Aus Cloud
+ * wiederherstellen“ zieht jede PDF dieses Ordners, die die App noch nicht
+ * kennt, in den Arbeitsordner und legt Verlaufseintraege an — neues Geraet,
+ * gleiche Liste.
  *
  * Fehlverhalten ist bewusst STILL: Ist das Ziel nicht erreichbar (Cloud
  * offline, App deinstalliert), geschieht nichts — beim naechsten Scan oder
@@ -40,6 +41,9 @@ object BackupStore {
         val lastModified: Long
     )
 
+    /** Fester Ordnername im Ziel — das Wiedererkennungszeichen des Backups. */
+    const val FOLDER_NAME = "Scanbird"
+
     /** Ordner-Picker: URI mitsamt dauerhaft haltbarer Berechtigung anfordern. */
     fun pickFolderIntent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
         addFlags(
@@ -51,11 +55,12 @@ object BackupStore {
 
     fun target(context: Context): Uri? = SettingsStore(context).backupTreeUri
 
-    /** Lesbares Ziel-Etikett fuer die Einstellungen — der gewaehlte Ordner
-     *  selbst (0.5.11: kein Unterordner mehr, das Ziel IST das Backup). */
+    /** Lesbares Ziel-Etikett fuer die Einstellungen: der gewaehlte Ordner
+     *  mit seinem Scanbird-Unterordner (0.5.12). */
     fun targetLabel(context: Context): String? {
         val uri = target(context) ?: return null
-        return displayName(uri)
+        val name = displayName(uri)
+        return if (name == FOLDER_NAME) name else name + "/" + FOLDER_NAME
     }
 
     /** Neues Ziel setzen: Berechtigung dauerhaft nehmen, das alte freigeben. */
@@ -80,6 +85,8 @@ object BackupStore {
             }
         }
         SettingsStore(context).backupTreeUri = uri
+        // Neues Ziel: die gemerkte Unterordner-ID gehoert zum alten Ziel.
+        SettingsStore(context).backupFolderId = null
     }
 
     /** Ziel entfernen: Berechtigung freigeben, Einstellung loeschen. */
@@ -96,6 +103,7 @@ object BackupStore {
             }
         }
         SettingsStore(context).backupTreeUri = null
+        SettingsStore(context).backupFolderId = null
     }
 
     /** Lesbarer Ordnername fuer die Einstellungen (z. B. „Scanbird-Backup“). */
@@ -107,6 +115,92 @@ object BackupStore {
     }
 
     /**
+     * Backup-Ordner aufloesen (0.5.12): Das Ziel IST wieder der gewaehlte
+     * Ordner PLUS fester "Scanbird"-Unterordner — erkannt, angelegt oder
+     * gemerkt. Zwei Haertungen gegen kDrives Aussetzer von 0.5.10:
+     * 1. Die einmal aufgeloeste Dokument-ID wird gemerkt; der Alltagsbetrieb
+     *    fragt sie direkt ab — keine Wurzel-Abfrage, kein Anlegen.
+     * 2. Bei der Suche zaehlt der NAME, nicht der MIME-Typ; ein Treffer muss
+     *    sich listen lassen, sonst ist er kein Ordner.
+     * Liefert die Dokument-ID oder im Fehlerfall eine Diagnose.
+     */
+    data class ResolvedFolder(val documentId: String?, val error: String?)
+
+    fun resolveFolder(context: Context): ResolvedFolder {
+        val tree = target(context)
+            ?: return ResolvedFolder(null, "Kein Zielordner gespeichert.")
+        val settings = SettingsStore(context)
+        // 1. Der gewaehlte Ordner heisst selbst "Scanbird": direkt nutzen.
+        if (displayName(tree) == FOLDER_NAME) {
+            return ResolvedFolder(
+                DocumentsContract.getTreeDocumentId(tree), null
+            )
+        }
+        // 2. Gemerkte Unterordner-ID: laesst sich der Ordner noch listen,
+        //    lebt er — dann direkt nutzen, ganz ohne Wurzel-Abfrage.
+        val cachedId = settings.backupFolderId
+        if (cachedId != null && settings.backupFolderTree == tree.toString()) {
+            try {
+                queryFiles(context, tree, cachedId)
+                return ResolvedFolder(cachedId, null)
+            } catch (e: Exception) {
+                settings.backupFolderId = null
+            }
+        }
+        // 3. Volle Aufloesung: Kandidaten nach Namen suchen, jeden als
+        //    Ordner pruefen, sonst anlegen. Nur Erfolg wird gemerkt.
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        val candidates = try {
+            queryFiles(context, tree, rootId).filter { it.name == FOLDER_NAME }
+        } catch (e: Exception) {
+            return ResolvedFolder(
+                null,
+                "Wurzel-Abfrage: ${e.javaClass.simpleName}: ${e.message}"
+            )
+        }
+        for (candidate in candidates) {
+            try {
+                queryFiles(context, tree, candidate.documentId)
+                settings.backupFolderTree = tree.toString()
+                settings.backupFolderId = candidate.documentId
+                return ResolvedFolder(candidate.documentId, null)
+            } catch (e: Exception) {
+            }
+        }
+        if (candidates.isNotEmpty()) {
+            return ResolvedFolder(
+                null,
+                "Ordner pruefen: \"$FOLDER_NAME\" existiert, laesst sich aber " +
+                    "nicht oeffnen — evtl. Sync-Problem der Cloud-App."
+            )
+        }
+        val created = try {
+            DocumentsContract.createDocument(
+                context.contentResolver,
+                DocumentsContract.buildDocumentUriUsingTree(tree, rootId),
+                DocumentsContract.Document.MIME_TYPE_DIR,
+                FOLDER_NAME
+            )
+        } catch (e: Exception) {
+            return ResolvedFolder(
+                null,
+                "Ordner anlegen: ${e.javaClass.simpleName}: ${e.message}"
+            )
+        }
+        if (created == null) {
+            return ResolvedFolder(
+                null,
+                "Ordner anlegen: createDocument lieferte null — existiert " +
+                    "\"$FOLDER_NAME\" schon? Dann ihn direkt als Ziel whlen."
+            )
+        }
+        val createdId = DocumentsContract.getDocumentId(created)
+        settings.backupFolderTree = tree.toString()
+        settings.backupFolderId = createdId
+        return ResolvedFolder(createdId, null)
+    }
+
+    /**
      * Rueckstand sichern: alle Scans ohne Backup-Kopie in den Backup-Ordner
      * ziehen. Kein Ziel oder lesbarer Zielordner → still ausfallen; der
      * naechste Scan oder Start versucht es wieder. Liefert true, wenn der
@@ -115,9 +209,10 @@ object BackupStore {
     suspend fun ensureBackedUp(context: Context, dao: ScanDao): Boolean =
         withContext(Dispatchers.IO) {
             val tree = target(context) ?: return@withContext false
-            // 0.5.11: Der gewaehlte Ordner IST das Backup — keine Unterordner-
-            //  Suche, kein Anlegen mehr. Die Dokument-ID steht im Tree-URI.
-            val folderId = DocumentsContract.getTreeDocumentId(tree)
+            // 0.5.12: Erkannter oder angelegter Scanbird-Unterordner —
+            // im Alltag direkt ueber die gemerkte ID.
+            val folderId = resolveFolder(context).documentId
+                ?: return@withContext false
             try {
                 val existing = queryFiles(context, tree, folderId)
                     .mapTo(HashSet()) { it.name }
@@ -167,7 +262,8 @@ object BackupStore {
     suspend fun restoreMissing(context: Context, dao: ScanDao): Int? =
         withContext(Dispatchers.IO) {
             val tree = target(context) ?: return@withContext null
-            val folderId = DocumentsContract.getTreeDocumentId(tree)
+            val folderId = resolveFolder(context).documentId
+                ?: return@withContext null
             try {
                 val known = dao.allFileNames().toHashSet()
                 var restored = 0
@@ -188,7 +284,8 @@ object BackupStore {
     suspend fun countRestorable(context: Context, dao: ScanDao): Int =
         withContext(Dispatchers.IO) {
             val tree = target(context) ?: return@withContext 0
-            val folderId = DocumentsContract.getTreeDocumentId(tree)
+            val folderId = resolveFolder(context).documentId
+                ?: return@withContext 0
             try {
                 val known = dao.allFileNames().toHashSet()
                 queryFiles(context, tree, folderId).count {
@@ -248,7 +345,7 @@ object BackupStore {
      */
     fun removeBackupName(context: Context, fileName: String) {
         val tree = target(context) ?: return
-        val folderId = DocumentsContract.getTreeDocumentId(tree)
+        val folderId = resolveFolder(context).documentId ?: return
         try {
             for (child in queryFiles(context, tree, folderId)) {
                 if (child.name == fileName) {
@@ -276,12 +373,17 @@ object BackupStore {
     fun listBackupFiles(context: Context): ListResult {
         val tree = target(context)
             ?: return ListResult(null, "Kein Zielordner gespeichert.")
-        // 0.5.11: Direkt in den gewaehlten Ordner schauen — keine Wurzel-
-        // Abfrage, kein Ordner-Anlegen. Genau die Kette, an der kDrive
-        // regelmaessig scheiterte, ist damit verschwunden.
+        // 0.5.12: Auflösung über resolveFolder (gemerkte ID im Alltag), dann
+        // nur PDFs listen — der Aufräum-Bildschirm gehört den Scans, nicht
+        // dem sonstigen Inhalt der Cloud.
+        val resolved = resolveFolder(context)
+        if (resolved.documentId == null) {
+            return ListResult(null, resolved.error)
+        }
         return try {
             ListResult(
-                queryFiles(context, tree, DocumentsContract.getTreeDocumentId(tree)),
+                queryFiles(context, tree, resolved.documentId)
+                    .filter { it.name.endsWith(".pdf", ignoreCase = true) },
                 null
             )
         } catch (e: Exception) {

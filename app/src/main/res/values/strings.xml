@@ -51,7 +51,7 @@
     <string name="backup_target_set">Ziel: %1$s</string>
     <string name="backup_target_missing">Noch kein Zielordner gewählt.</string>
     <string name="choose_backup_folder">Zielordner wählen</string>
-    <string name="backup_hint">Einrichtung in 3 Schritten:\n1. Im Auswahldialog oben links auf ☰ tippen.\n2. Cloud-App antippen (z. B. kDrive).\n3. Den gewünschten Ordner antippen — er ist ab sofort das Backup. Tipp: In der Cloud einen eigenen Ordner wie „Scanbird“ anlegen und genau den wählen.\nAb jetzt landet jeder Scan automatisch dort.</string>
+    <string name="backup_hint">Einrichtung in 3 Schritten:\n1. Im Auswahldialog oben links auf ☰ tippen.\n2. Cloud-App antippen (z. B. kDrive).\n3. Beliebigen Ort in der Cloud antippen — Scanbird erkennt oder legt dort automatisch den Ordner „Scanbird“ an.\nAb jetzt landet jeder Scan automatisch dort.</string>
     <string name="remove_backup_target">Ziel entfernen</string>
     <string name="cloud_storage">Cloud-Speicher</string>
     <string name="cloud_cleanup">Cloud-Speicher aufräumen</string>
