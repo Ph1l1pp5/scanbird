@@ -59,7 +59,7 @@ object BackupStore {
      *  mit seinem Scanbird-Unterordner (0.5.12). */
     fun targetLabel(context: Context): String? {
         val uri = target(context) ?: return null
-        val name = displayName(uri)
+        val name = folderName(context, uri)
         return if (name == FOLDER_NAME) name else name + "/" + FOLDER_NAME
     }
 
@@ -106,7 +106,33 @@ object BackupStore {
         SettingsStore(context).backupFolderId = null
     }
 
-    /** Lesbarer Ordnername fuer die Einstellungen (z. B. „Scanbird-Backup“). */
+    /**
+     * Echter Ordnername laut Anbieter (0.5.13): eine einzelne Dokument-Abfrage
+     * fragt COLUMN_DISPLAY_NAME direkt beim Provider. Zuvor wurde der Name aus
+     * der Dokument-ID erraten — kDrive-IDs tragen den Namen aber nicht, weshalb
+     * der direkt gewaehlte Scanbird-Ordner nicht erkannt und ein doppelter
+     * Unterordner angelegt wurde. Liefert null, wenn der Anbieter die Abfrage
+     * nicht unterstuetzt; dann greift der ID-Fallback.
+     */
+    fun realDisplayName(context: Context, tree: Uri): String? = try {
+        val docId = DocumentsContract.getTreeDocumentId(tree)
+        val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+        context.contentResolver.query(
+            docUri,
+            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+            null, null, null
+        )?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Ordnername: erst den Anbieter fragen (zuverlaessig), sonst ID-Raten. */
+    fun folderName(context: Context, tree: Uri): String =
+        realDisplayName(context, tree) ?: displayName(tree)
+
+    /** Fallback: Name aus der Dokument-ID schneiden — nur noch Notnagel. */
     fun displayName(uri: Uri): String {
         val id = DocumentsContract.getTreeDocumentId(uri)
         val name = id.substringAfterLast('/')
@@ -130,8 +156,10 @@ object BackupStore {
         val tree = target(context)
             ?: return ResolvedFolder(null, "Kein Zielordner gespeichert.")
         val settings = SettingsStore(context)
-        // 1. Der gewaehlte Ordner heisst selbst "Scanbird": direkt nutzen.
-        if (displayName(tree) == FOLDER_NAME) {
+        // 1. Der gewaehlte Ordner heisst selbst "Scanbird": direkt nutzen —
+        //    mit echtem Namen laut Anbieter (0.5.13), nicht geraten aus der
+        //    ID, sonst entsteht hier ein Scanbird im Scanbird.
+        if (folderName(context, tree) == FOLDER_NAME) {
             return ResolvedFolder(
                 DocumentsContract.getTreeDocumentId(tree), null
             )
