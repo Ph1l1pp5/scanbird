@@ -16,6 +16,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Brush
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -107,13 +109,23 @@ class MainActivity : ComponentActivity() {
 
 private enum class Screen { Verlauf, Einstellungen, CloudSpeicher }
 
-/** Signatur-Rahmen (0.5.3): Knöpfe im Pillen-Look — Neon-Cyan-Rand wie im Verlauf. */
-private val NeonCyanBorder = BorderStroke(2.dp, Color(0xFF00FFFF).copy(alpha = 0.55f))
+/** Signatur-Rahmen (0.5.3): Knöpfe im Pillen-Look. Seit 0.5.6 im Neon-Regenbogen
+ *  statt Cyan — Regenbogen-Thermobecher-Feeling, diagonal von Pink nach Violett. */
+private val RainbowNeon = Brush.linearGradient(
+    listOf(
+        Color(0xFFFF008A), // Neon-Pink
+        Color(0xFFFF8A00), // Neon-Orange
+        Color(0xFF00FF9D), // Neon-Mint
+        Color(0xFF00D9FF), // Neon-Cyanblau
+        Color(0xFF8A2BFF)  // Neon-Violett
+    )
+)
+private val NeonRainbowBorder = BorderStroke(2.dp, RainbowNeon)
 
-/** 0.5.5: Der Zielordner-Knopf ist komplett Neon-Cyan gefüllt, die Schrift
- *  dunkle Tinte — auf Cyan gut lesbar und nicht mehr grün. */
-private val NeonCyan = Color(0xFF00FFFF)
-private val CyanInk = Color(0xFF00333B)
+/** 0.5.6: Der Zielordner-Knopf trägt den Regenbogen als Fläche, die Schrift
+ *  dunkle Tinte — auf dem Neon-Mix gut lesbar und nicht grün. */
+private val RainbowShape = RoundedCornerShape(50)
+private val NeonInk = Color(0xFF0F1420)
 
 @Composable
 fun ScanbirdApp() {
@@ -493,7 +505,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
                                 )
                                 .border(
                                     width = 2.dp,
-                                    color = Color(0xFF00FFFF).copy(alpha = 0.55f),
+                                    brush = RainbowNeon,
                                     shape = RoundedCornerShape(20.dp)
                                 )
                                 .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -778,10 +790,12 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
                 Button(
                     onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) },
+                    shape = RainbowShape,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonCyan,
-                        contentColor = CyanInk
-                    )
+                        containerColor = Color.Transparent,
+                        contentColor = NeonInk
+                    ),
+                    modifier = Modifier.background(brush = RainbowNeon, shape = RainbowShape)
                 ) {
                     Text(stringResource(R.string.choose_backup_folder))
                 }
@@ -801,7 +815,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onOpenCleanup, border = NeonCyanBorder) {
+                OutlinedButton(onClick = onOpenCleanup, border = NeonRainbowBorder) {
                     Text(stringResource(R.string.cloud_cleanup))
                 }
                 if (restorable > 0) {
@@ -809,7 +823,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     OutlinedButton(
                         onClick = { runRestore() },
                         enabled = !restoring,
-                        border = NeonCyanBorder
+                        border = NeonRainbowBorder
                     ) {
                         Text(stringResource(R.string.restore_button))
                     }
@@ -822,10 +836,12 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) },
+                    shape = RainbowShape,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonCyan,
-                        contentColor = CyanInk
-                    )
+                        containerColor = Color.Transparent,
+                        contentColor = NeonInk
+                    ),
+                    modifier = Modifier.background(brush = RainbowNeon, shape = RainbowShape)
                 ) {
                     Text(stringResource(R.string.choose_backup_folder))
                 }
@@ -835,7 +851,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                         BackupStore.clearTarget(context)
                         backupTarget = null
                     },
-                    border = NeonCyanBorder
+                    border = NeonRainbowBorder
                 ) {
                     Text(stringResource(R.string.remove_backup_target))
                 }
@@ -1051,7 +1067,7 @@ fun CloudCleanupScreen(onBack: () -> Unit) {
                                 )
                                 .border(
                                     width = 2.dp,
-                                    color = Color(0xFF00FFFF).copy(alpha = 0.55f),
+                                    brush = RainbowNeon,
                                     shape = RoundedCornerShape(20.dp)
                                 )
                                 .padding(horizontal = 20.dp, vertical = 12.dp),
