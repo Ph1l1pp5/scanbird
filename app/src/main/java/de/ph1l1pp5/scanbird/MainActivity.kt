@@ -772,6 +772,55 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
             )
         }
     ) { padding ->
+        if (target != null && targetProblem != null) {
+            // 0.5.16: Kaputtes Ziel — Bubble in der Bildschirm-Mitte statt
+            // verrutschtem Formular: kein Aufräumen, kein Restore, nur der
+            // Weg zurück zum Zielordner.
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    stringResource(R.string.backup_target_problem),
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 32.dp)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    targetProblem ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 32.dp)
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = { backupPicker.launch(BackupStore.pickFolderIntent()) },
+                    shape = RainbowShape,
+                    border = NeonRainbowBorder,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = NeonInk
+                    ),
+                    modifier = Modifier.background(brush = MetallicSheen, shape = RainbowShape)
+                ) {
+                    Text(stringResource(R.string.choose_backup_folder))
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        BackupStore.clearTarget(context)
+                        backupTarget = null
+                    },
+                    border = NeonRainbowBorder
+                ) {
+                    Text(stringResource(R.string.remove_backup_target))
+                }
+            }
+        } else {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -842,20 +891,6 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     ),
                     style = MaterialTheme.typography.bodyMedium
                 )
-                if (targetProblem != null) {
-                    // 0.5.15: Ziel gewaehlt, aber der Scanbird-Ordner darin
-                    // nicht auffindbar — sofort sagen statt still scheitern.
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        stringResource(R.string.backup_target_problem),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Text(
-                        targetProblem ?: "",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(onClick = onOpenCleanup, border = NeonRainbowBorder) {
                     Text(stringResource(R.string.cloud_cleanup))
@@ -899,6 +934,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
                     Text(stringResource(R.string.remove_backup_target))
                 }
             }
+        }
         }
     }
 }
