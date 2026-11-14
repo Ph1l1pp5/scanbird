@@ -772,7 +772,7 @@ fun EinstellungenScreen(onBack: () -> Unit, onOpenCleanup: () -> Unit) {
             )
         }
     ) { padding ->
-        if (target != null && targetProblem != null) {
+        if (backupTarget != null && targetProblem != null) {
             // 0.5.16: Kaputtes Ziel — Bubble in der Bildschirm-Mitte statt
             // verrutschtem Formular: kein Aufräumen, kein Restore, nur der
             // Weg zurück zum Zielordner.
