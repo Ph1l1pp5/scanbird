@@ -147,7 +147,9 @@ object BackupStore {
      * 1. Die einmal aufgeloeste Dokument-ID wird gemerkt; der Alltagsbetrieb
      *    fragt sie direkt ab — keine Wurzel-Abfrage, kein Anlegen.
      * 2. Bei der Suche zaehlt der NAME, nicht der MIME-Typ; ein Treffer muss
-     *    sich listen lassen, sonst ist er kein Ordner.
+     *    sich listen lassen, sonst ist er kein Ordner. Vor jedem Anlegen
+     *    beweist ein Wegwerf-Ordner, dass die Abfrage des Anbieters ehrlich
+     *    ist — blindes Anlegen waere die stille Duplikat-Falle.
      * Liefert die Dokument-ID oder im Fehlerfall eine Diagnose.
      */
     data class ResolvedFolder(val documentId: String?, val error: String?)
@@ -202,6 +204,51 @@ object BackupStore {
                     "nicht oeffnen — evtl. Sync-Problem der Cloud-App."
             )
         }
+        // Blindheits-Test (0.5.17): Ist der Scanbird-Ordner laut Abfrage
+        // nicht vorhanden, wird vor dem Anlegen ein Wegwerf-Ordner gelegt.
+        // Taucht er NICHT in der Abfrage auf, luegt der Anbieter — dann
+        // waere auch ein bestehender Scanbird-Ordner unsichtbar, und blindes
+        // Anlegen erzeugt stille Duplikate (kDrive macht genau das). Finger
+        // weg: Der Nutzer waehlt den Ordner besser direkt.
+        val probeName = ".scanbird-test-" + System.currentTimeMillis()
+        val probe = try {
+            DocumentsContract.createDocument(
+                context.contentResolver,
+                DocumentsContract.buildDocumentUriUsingTree(tree, rootId),
+                DocumentsContract.Document.MIME_TYPE_DIR,
+                probeName
+            )
+        } catch (e: Exception) {
+            return ResolvedFolder(
+                null,
+                "Ordner anlegen: ${e.javaClass.simpleName}: ${e.message}"
+            )
+        }
+        if (probe == null) {
+            return ResolvedFolder(
+                null,
+                "Ordner anlegen: createDocument lieferte null — existiert " +
+                    "\"$FOLDER_NAME\" schon? Dann ihn direkt als Ziel whlen."
+            )
+        }
+        val probeVisible = try {
+            queryFiles(context, tree, rootId).any { it.name == probeName }
+        } catch (e: Exception) {
+            false
+        }
+        try {
+            context.contentResolver.delete(probe, null, null)
+        } catch (e: Exception) {
+        }
+        if (!probeVisible) {
+            return ResolvedFolder(
+                null,
+                "Der Zielordner lässt sich nicht zuverlässig auslesen — " +
+                    "bitte den Scanbird-Ordner direkt als Ziel auswählen."
+            )
+        }
+        // Abfrage ist ehrlich, es gab wirklich keinen Scanbird-Ordner:
+        // jetzt darf er angelegt werden.
         val created = try {
             DocumentsContract.createDocument(
                 context.contentResolver,
