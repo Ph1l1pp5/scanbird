@@ -5,14 +5,20 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import kotlin.math.max
+import kotlin.math.sqrt
 
 /**
  * Findet das Blatt im Foto: die größte helle Fläche gegen den dunkleren Untergrund.
  * Die vier Ecken werden über Extremwerte von x+y und x-y bestimmt, das Ergebnis
  * mit Perspektivkorrektur (setPolyToPoly) auf A4 gebracht (200 dpi — seit 0.4.2,
  * vorher 150 dpi: mehr Auflösung fuer schaerferen Text und stabilerer Titel-OCR).
- * Scheitert die Erkennung, wird das ganze Bild mittig auf A4 beschnitten.
- * Alles lokal, ohne ML Kit, ohne Netz.
+ * Seit 0.5.29 wird JEDE Ecke lokal auf voller Auflösung nachgemessen: Der
+ * Thumbnail-Finder trifft sie nur auf gut zehn bis achtzig Pixel — nach dem
+ * Warp blieb genau so viel Restperspektive im Blatt. Das Nachmessen trennt im
+ * Fenster um die Grobecke Papier vom Untergrund (Otsu) und nimmt den Extremwert
+ * der hellen Region, jetzt pixelgenau; zwei Vollpixel Polster halten den
+ * Papierrand im Bild. Scheitert die Erkennung, wird das ganze Bild mittig auf
+ * A4 beschnitten. Alles lokal, ohne ML Kit, ohne Netz.
  */
 object DocumentFinder {
 
@@ -22,7 +28,11 @@ object DocumentFinder {
     fun extractPage(source: Bitmap): Bitmap {
         return try {
             val quad = findQuad(source)
-            if (quad != null) warpToA4(source, quad) else centerCropA4(source)
+            if (quad != null) {
+                warpToA4(source, refineQuad(source, quad))
+            } else {
+                centerCropA4(source)
+            }
         } catch (e: Exception) {
             centerCropA4(source)
         }
@@ -154,6 +164,120 @@ object DocumentFinder {
             br.first + pad, br.second + pad,
             bl.first - pad, bl.second + pad
         )
+    }
+
+    /**
+     * Ecken nachmessen (0.5.29): Der Quad-Finder arbeitet auf einem 256-px-
+     * Thumbnail, dazu kommt sein sechs-Pixel-Polster — seine Ecken sitzen
+     * gut zehn bis achtzig Vollpixel daneben, und nach dem Warp bleibt genau
+     * so viel Restperspektive im Blatt. Jede Ecke wird deshalb lokal auf
+     * VOLLER Aufloesung nachgemessen (Fenster +/- 96 px um die Grobecke):
+     * Otsu trennt dort Papier vom dunkleren Untergrund, die Ecke ist der
+     * Extremwert (x+y bzw. x−y je Ecke) der hellen Region — pixelgenau.
+     * Zwei Vollpixel Polster halten den Papierrand im Bild. Gelingt das
+     * Nachmessen einer Ecke nicht, bleibt ihre Grobecke; wird der vermessene
+     * Quad unplaublicb (zusammengefallene Kante, Verhaeltnissprung), gilt
+     * der ganze Grobe Quad.
+     */
+    private fun refineQuad(source: Bitmap, coarse: FloatArray): FloatArray {
+        val result = coarse.copyOf()
+        for (i in 0 until 4) {
+            val c = refineCorner(source, coarse[i * 2], coarse[i * 2 + 1], i)
+            if (c != null) {
+                result[i * 2] = if (i == 0 || i == 3) c.first - 2f else c.first + 2f
+                result[i * 2 + 1] = if (i == 0 || i == 1) c.second - 2f else c.second + 2f
+            }
+        }
+        return if (quadPlausible(result)) result else coarse
+    }
+
+    /** Eine Ecke im lokalen Fenster nachmessen — null, wenn dort keine klare Trennung liegt. */
+    private fun refineCorner(source: Bitmap, cx: Float, cy: Float, corner: Int): Pair<Float, Float>? {
+        val r = 96
+        val x0 = (cx - r).toInt().coerceAtLeast(0)
+        val x1 = (cx + r).toInt().coerceAtMost(source.width - 1)
+        val y0 = (cy - r).toInt().coerceAtLeast(0)
+        val y1 = (cy + r).toInt().coerceAtMost(source.height - 1)
+        val w = x1 - x0 + 1
+        val h = y1 - y0 + 1
+        if (w < 24 || h < 24) return null
+        val px = IntArray(w * h)
+        source.getPixels(px, 0, w, x0, y0, w, h)
+        val lum = IntArray(w * h)
+        for (i in px.indices) {
+            val p = px[i]
+            lum[i] = ((p and 0xFF) * 299 + ((p shr 8) and 0xFF) * 587 + ((p shr 16) and 0xFF) * 114) / 1000
+        }
+        val hist = IntArray(256)
+        for (v in lum) hist[v]++
+        val threshold = otsu(hist, lum.size)
+        var bright = 0
+        for (v in threshold until 256) bright += hist[v]
+        // Ohne klare Trennung (fast alles hell oder fast alles dunkel) wird
+        // nicht geraten — dann bleibt die Grobecke.
+        if (bright < w * h / 10 || bright > w * h * 9 / 10) return null
+        var bestIdx = -1
+        var bestVal = 0
+        for (idx in lum.indices) {
+            if (lum[idx] < threshold) continue
+            val x = idx % w
+            val y = idx / w
+            val v = when (corner) {
+                0 -> -x - y        // oben-links: Minimum von x+y
+                1 -> x - y         // oben-rechts: Maximum von x-y
+                2 -> x + y         // unten-rechts: Maximum von x+y
+                else -> y - x      // unten-links: Minimum von x-y
+            }
+            if (bestIdx < 0 || v > bestVal) {
+                bestVal = v
+                bestIdx = idx
+            }
+        }
+        if (bestIdx < 0) return null
+        return Pair((x0 + bestIdx % w).toFloat(), (y0 + bestIdx / w).toFloat())
+    }
+
+    /** Kleiner Otsu: Schwelle mit maximaler Zwischenklassen-Varianz im Histogramm. */
+    private fun otsu(hist: IntArray, total: Int): Int {
+        var sumAll = 0L
+        for (v in hist.indices) sumAll += v.toLong() * hist[v]
+        var sumB = 0L
+        var wB = 0L
+        var best = 0f
+        var bestT = 128
+        for (t in hist.indices) {
+            wB += hist[t]
+            if (wB == 0L) continue
+            val wF = total.toLong() - wB
+            if (wF == 0L) break
+            sumB += t.toLong() * hist[t]
+            val mB = sumB.toFloat() / wB
+            val mF = (sumAll - sumB).toFloat() / wF
+            val between = wB.toFloat() * wF * (mB - mF) * (mB - mF)
+            if (between > best) {
+                best = between
+                bestT = t
+            }
+        }
+        return bestT
+    }
+
+    /** Quad-Plausibilitaet: keine zusammengefallene Kante, Seitenverhaeltnis um A4 herum. */
+    private fun quadPlausible(quad: FloatArray): Boolean {
+        fun len(ax: Float, ay: Float, bx: Float, by: Float): Float {
+            val dx = bx - ax
+            val dy = by - ay
+            return sqrt(dx * dx + dy * dy)
+        }
+        val top = len(quad[0], quad[1], quad[2], quad[3])
+        val bottom = len(quad[4], quad[5], quad[6], quad[7])
+        val left = len(quad[0], quad[1], quad[6], quad[7])
+        val right = len(quad[2], quad[3], quad[4], quad[5])
+        if (minOf(top, bottom, left, right) < 200f) return false
+        val w = (top + bottom) / 2f
+        val h = (left + right) / 2f
+        val ratio = w / h
+        return ratio in 0.4f..1.3f
     }
 
     private fun warpToA4(source: Bitmap, quad: FloatArray): Bitmap {
