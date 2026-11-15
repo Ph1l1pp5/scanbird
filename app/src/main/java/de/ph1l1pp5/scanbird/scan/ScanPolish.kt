@@ -107,9 +107,10 @@ object ScanPolish {
      * bei hellem Grau mitten durch die Buchstaben und zerriss Glyphen in
      * Schwarz/Keil/Weiss-Flecken; das Gemittel mittelt das Flackern weg,
      * die Zeile wird ein ruhiger, satter Grauton wie vom Flachbett. Seit
-     * 0.5.25 faengt ein Weisspunkt-Boden in flachen Fenstern (Streuung
-     * unter 10) zudem Tinte, die nur wenige Stufen dunkler als Papier ist —
-     * die Sauvola-Schwelle allein hiess sie Weiss.
+     * 0.5.25 faengt ein Weisspunkt-Boden in flachen Fenstern zudem Tinte,
+     * die nur wenige Stufen dunkler als Papier ist — die Sauvola-Schwelle
+     * allein hiess sie Weiss. Seit 0.5.27 ist der Ton zweistufig: Strich-
+     * kerne lesen das echte Pixel, Flaches das Gemittel.
      */
     private fun sauvola(src: IntArray, w: Int, h: Int): IntArray {
         val win = max(15, w / 32)
@@ -168,13 +169,22 @@ object ScanPolish {
                     v > threshold + band -> 255
                     v <= threshold -> 0
                     else -> {
-                        // Graukeil ueber Glaettung (0.5.23 Keil, 0.5.24
-                        // Glaettung): Abstand des 3x3-Gemittels zur Schwelle
-                        // wird gespreizt — Schwelle-nahe Tinte fast schwarz,
-                        // Flaum am Bandrand weiss; Nachbarn ziehen den Ton
-                        // mit, Fleckigkeit hebt sich auf.
-                        val s = smooth[y * w + x]
-                        (255 - (band - (s - threshold)) * steep).toInt().coerceIn(0, 255)
+                        // Zweistufiger Ton (0.5.23 Keil, 0.5.24 Glaettung,
+                        // 0.5.27 zweistufig): Die 0.5.24-Glaettung beruhigte
+                        // das Schwelle-Flackern, halbierte aber duennen grauen
+                        // Strichen ihren Kontrast — die Absenderzeile las sich
+                        // halb ausgewaschen, waehrend JPEG-Klumpen des Handy-
+                        // fotos als Schlieren durchrutschten (Philipps Screenshot-
+                        // Beweis, 16:26). Zweistufig: DERBE Tinte — Pixel roh
+                        // unter halber Bandtiefe UND Umfeld mitgezogen — nimmt
+                        // ihren Ton aus dem ECHTEN Pixel, Strichkerne behalten
+                        // vollen Kontrast. Alles Flache (Raender, Rauschen,
+                        // JPEG-Klumpen, Einzelpixel-Staub) bleibt beim geglaet-
+                        // teten Ton und verwischt zu Nichts. Tunables: 0.5
+                        // (Kerntiefe), 3 (Mitzieh-Gate).
+                        val sm = smooth[y * w + x]
+                        val base = if (v < mean - band * 0.5f && sm < mean - 3f) v else sm
+                        (255 - (band - (base - threshold)) * steep).toInt().coerceIn(0, 255)
                     }
                 }
             }
