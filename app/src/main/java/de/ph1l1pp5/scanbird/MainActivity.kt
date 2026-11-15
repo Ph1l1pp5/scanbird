@@ -89,6 +89,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -256,13 +257,13 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
     // Danach (finally) sichert das SAF-Backup still den Rueckstand — die OCR
     // benennt meist noch um, also erst NACH ihr kopieren, sonst laege der
     // alte Name in der Cloud.
-    fun autoTitleScan(fileName: String?, savedTitle: String?) {
+    fun autoTitleScan(fileName: String?, savedTitle: String?, firstPagePng: ByteArray? = null) {
         if (fileName == null || savedTitle == null) return
         scope.launch {
             try {
                 val newTitle = withContext(Dispatchers.IO) {
                     try {
-                        TitleOcr.extractTitle(context, fileName)
+                        TitleOcr.extractTitle(context, fileName, firstPagePng)
                     } catch (e: Exception) {
                         null
                     }
@@ -340,7 +341,7 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
             if (outcome.error == null) {
                 pendingPages = emptyList()
                 showScanner = false
-                autoTitleScan(outcome.fileName, outcome.title)
+                autoTitleScan(outcome.fileName, outcome.title, outcome.firstPagePng)
             } else {
                 // Fehlgeschlagene Seiten rueumen wir weg; der Fehler-Dialog lebt
                 // im Haupt-Baum, also dorthin zurueck.
@@ -964,6 +965,7 @@ private suspend fun saveScan(
         // als JPEG-Seite packen und das Bitmap recyceln. So liegt nie mehr als
         // eine Seite als Pixel im Speicher, egal wie dick das Dokument wird.
         val pages = ArrayList<PdfWriter.Page>()
+        var firstPagePng: ByteArray? = null
         for (photoFile in photoFiles) {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             var readable = false
@@ -1006,6 +1008,19 @@ private suspend fun saveScan(
             val polished = ScanPolish.polish(bitmap)
             bitmap.recycle()
             pages.add(PdfWriter.pageOf(polished))
+            // 0.5.26: Von der ERSTEN Seite ein verlustfreies PNG fuer die Titel-OCR.
+            // Tesseract las bisher den 200-dpi-JPEG aus dem fertigen PDF neu gerendert
+            // und hochskaliert — auf matschigen Blaettern brach sich der Titel genau
+            // dort (dasselbe Blatt, dasselbes Licht: einmal "Leistungsnachweis",
+            // einmal "Logopaedie Am Pulverhof Leistungs"). Das PNG sind ein paar
+            // Hundert KB, fliegt nach der OCR wieder raus und kostet nur bei der
+            // ersten Seite Encode-Zeit.
+            if (pages.size == 1) {
+                firstPagePng = ByteArrayOutputStream().use { out ->
+                    polished.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    out.toByteArray()
+                }
+            }
             polished.recycle()
         }
 
@@ -1036,17 +1051,19 @@ private suspend fun saveScan(
         for (photoFile in photoFiles) {
             photoFile.delete()
         }
-        SaveOutcome(null, fileName, title)
+        SaveOutcome(null, fileName, title, firstPagePng)
     } catch (e: Exception) {
         SaveOutcome("Fehler: " + (e.message ?: e.javaClass.simpleName))
     }
 }
 
-/** Ergebnis eines Speicherns: Fehlerklartext oder Dateiname und Titel des neuen Scans. */
+/** Ergebnis eines Speicherns: Fehlerklartext oder Dateiname, Titel und das PNG der
+ * ersten Seite (fuer die Titel-OCR, 0.5.26) des neuen Scans. */
 private data class SaveOutcome(
     val error: String?,
     val fileName: String? = null,
-    val title: String? = null
+    val title: String? = null,
+    val firstPagePng: ByteArray? = null
 )
 
 // JPEGs tragen die Drehung in den EXIF-Daten; BitmapFactory ignoriert sie, wir nicht.

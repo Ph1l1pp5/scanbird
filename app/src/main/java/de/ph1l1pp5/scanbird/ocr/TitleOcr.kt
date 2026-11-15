@@ -2,6 +2,7 @@ package de.ph1l1pp5.scanbird.ocr
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
@@ -26,49 +27,77 @@ object TitleOcr {
 
     private data class Line(val text: String, val top: Int, val height: Int, val left: Int, val width: Int, val conf: Float)
 
-    /** Liest die erste Seite und schlägt einen Titel vor — null, wenn nichts Brauchbares lesbar ist. */
-    fun extractTitle(context: Context, fileName: String): String? = synchronized(this) {
+    /**
+     * Liest die erste Seite und schlägt einen Titel vor — null, wenn nichts
+     * Brauchbares lesbar ist. Seit 0.5.26 wird bevorzugt das verlustfreie PNG
+     * des polierten Erstseiten-Bitmaps gelesen (firstPagePng, beim Speichern
+     * mitgeschnitten): Tesseract sieht die Original-Pixel in voller Aufloesung
+     * statt einen neu gerenderten, hochskalierten 200-dpi-JPEG aus dem PDF —
+     * genau auf matschigen Blaettern brach sich der Titel am JPEG.
+     * Ohne PNG (alte Scans, Umbenennen) bleibt der PDF-Render-Pfad wie bisher.
+     */
+    fun extractTitle(context: Context, fileName: String, firstPagePng: ByteArray? = null): String? = synchronized(this) {
         val api = obtainEngine(context) ?: return null
+        // 0.5.26: Original statt Render — das polierte Bitmap direkt dekodieren.
+        if (firstPagePng != null) {
+            val bmp = try {
+                BitmapFactory.decodeByteArray(firstPagePng, 0, firstPagePng.size)
+            } catch (e: Exception) {
+                null
+            }
+            if (bmp != null) {
+                try {
+                    return readTitle(api, bmp)
+                } finally {
+                    bmp.recycle()
+                }
+            }
+        }
         val fd = ScanStore.openRead(context, ScanStore.locate(context, fileName)) ?: return null
         val page = renderFirstPage(fd) ?: return null
         try {
-            val lines = readLines(api, page)
-            // 0.5.21: Dokumenttyp-Pass VOR der Wertung — sagt ein Formular
-            // selbst, was es ist („Rechnung Nr.: 269“), schlägt das jede
-            // größengewichtete Kandidatenliste.
-            documentTypeTitle(lines)?.let { typed -> clean(typed)?.let { return it } }
-            // Ganzes Blatt statt oberem Drittel: Briefe tragen ihren Titel gern mittig.
-            // Wertung = Zeilenhöhe × sanftes Positionsgewicht × Titelqualität ×
-            // Lese-Konfidenz — Adress-, Anrede- und Formularzeilen werden so stark
-            // abgewertet, dass selbst eine übergroße Box ihnen den Titel nicht mehr
-            // stehlen kann; Zeilen, die Tesseract nur geraten hat, ebenso.
-            val pageH = page.height.toFloat()
-            val pageW = page.width.toFloat()
-            // PLZ-Flag je Zeile: Wer direkt ueber „22045 Hamburg“ sitzt, gehoert zum
-            // Adressblock (Name, Strasse, Praxis) — das ist nie der Titel.
-            val plzFlags = lines.map { isPlzLine(it.text) }
-            var best: Line? = null
-            var bestScore = 0f
-            lines.forEachIndexed { i, line ->
-                if (line.text.length >= 3 && line.text.count { c -> c.isLetter() } >= 3 &&
-                    !isDateOrMetaLine(line.text)
-                ) {
-                    val score = line.height *
-                        (1.2f - 0.4f * (line.top + line.height / 2f) / pageH) *
-                        sideFactor(line, pageW) * titleQuality(line.text) *
-                        confFactor(line.conf) * capsFactor(line.text) *
-                        addressFactor(i, lines, plzFlags)
-                    if (score > bestScore) {
-                        bestScore = score
-                        best = line
-                    }
-                }
-            }
-            val title = best?.text
-            title?.let { clean(it) } ?: fallbackTopStrip(api, page)
+            readTitle(api, page)
         } finally {
             page.recycle()
         }
+    }
+
+    /** Wertet eine Seite: Dokumenttyp-Pass vor der Groessen-Wertung, sonst Heuristik. */
+    private fun readTitle(api: TessBaseAPI, page: Bitmap): String? {
+        val lines = readLines(api, page)
+        // 0.5.21: Dokumenttyp-Pass VOR der Wertung — sagt ein Formular
+        // selbst, was es ist („Rechnung Nr.: 269“), schlägt das jede
+        // größengewichtete Kandidatenliste.
+        documentTypeTitle(lines)?.let { typed -> clean(typed)?.let { return it } }
+        // Ganzes Blatt statt oberem Drittel: Briefe tragen ihren Titel gern mittig.
+        // Wertung = Zeilenhöhe × sanftes Positionsgewicht × Titelqualität ×
+        // Lese-Konfidenz — Adress-, Anrede- und Formularzeilen werden so stark
+        // abgewertet, dass selbst eine übergroße Box ihnen den Titel nicht mehr
+        // stehlen kann; Zeilen, die Tesseract nur geraten hat, ebenso.
+        val pageH = page.height.toFloat()
+        val pageW = page.width.toFloat()
+        // PLZ-Flag je Zeile: Wer direkt ueber „22045 Hamburg“ sitzt, gehoert zum
+        // Adressblock (Name, Strasse, Praxis) — das ist nie der Titel.
+        val plzFlags = lines.map { isPlzLine(it.text) }
+        var best: Line? = null
+        var bestScore = 0f
+        lines.forEachIndexed { i, line ->
+            if (line.text.length >= 3 && line.text.count { c -> c.isLetter() } >= 3 &&
+                !isDateOrMetaLine(line.text)
+            ) {
+                val score = line.height *
+                    (1.2f - 0.4f * (line.top + line.height / 2f) / pageH) *
+                    sideFactor(line, pageW) * titleQuality(line.text) *
+                    confFactor(line.conf) * capsFactor(line.text) *
+                    addressFactor(i, lines, plzFlags)
+                if (score > bestScore) {
+                    bestScore = score
+                    best = line
+                }
+            }
+        }
+        val title = best?.text
+        return title?.let { clean(it) } ?: fallbackTopStrip(api, page)
     }
 
     /** Einmalige Engine-Initialisierung; das Modell liegt als Asset in der APK und wird nach filesDir kopiert. */
