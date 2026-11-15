@@ -15,8 +15,9 @@ import kotlin.math.tan
  * Scan-Politur (M2.2): macht aus dem Knips den Flachbett-Look. Vier Waschgänge:
  * (1) Beleuchtung plätten — das Bild wird durch sein großes Box-Gemittel geteilt,
  *     das hebt Schatten, Überbelichtung und Knitterschatten auf gleichmäßiges
- *     Papierweiß. (2) Sauvola-Binarisierung für knackscharfen Scanner-Kontrast.
- *     (3) Kippung bis ±8 Grad über Profil-Bewertung geraderücken. (4) Dunkle Tischreste
+ *     Papierweiß. (2) Sauvola-Binarisierung mit Grauband für knackscharfen
+ *     Scanner-Kontrast — hellgraue Briefkopfzeilen bleiben als Grauton lesbar
+ *     statt unter Weiß zu verschwinden. (3) Kippung bis ±8 Grad über Profil-Bewertung geraderücken. (4) Dunkle Tischreste
  *     an den Rändern abschneiden, damit das Blatt den Rahmen füllt.
  * Keine externe Bibliothek — nur Summentabellen und Matrizen, alles offline.
  */
@@ -90,8 +91,13 @@ object ScanPolish {
     }
 
     /**
-     * Sauvola-Binarisierung: lokale Schwelle aus Fenster-Mittelwert und -Streuung.
-     * Robust gegen Restschatten und feine Grautöne — der Scanner-Kontrast schlechthin.
+     * Sauvola-Binarisierung mit Grauband (0.5.21): lokale Schwelle aus Fenster-
+     * Mittelwert und -Streuung. Klar ueber der Schwelle (+Rand) wird Papier-
+     * weiss, klar darunter wird Schrift-Schwarz — und der Streifen dazwischen
+     * BEHAELT seinen geglätteten Grauwert: Hellgraue Briefkopfzeilen (Absender
+     * in gedämpftem Grau) fielen zuvor unter das harte Weiss und verschwanden
+     * spurlos; als Grauton ueberleben sie lesbar, ohne den Flachbett-Look zu
+     * verwässern, und duenne Grau-Striche wirken gaubildschärfer.
      */
     private fun sauvola(src: IntArray, w: Int, h: Int): IntArray {
         val win = max(15, w / 32)
@@ -113,6 +119,7 @@ object ScanPolish {
         val half = win / 2
         val k = 0.2f
         val r = 128f
+        val band = 24f
         for (y in 0 until h) {
             val y0 = max(0, y - half)
             val y1 = min(h - 1, y + half)
@@ -129,7 +136,12 @@ object ScanPolish {
                 val variance = s2.toFloat() / n - mean * mean
                 val sd = if (variance > 0f) sqrt(variance) else 0f
                 val threshold = mean * (1f + k * (sd / r - 1f))
-                out[y * w + x] = if (src[y * w + x] > threshold) 255 else 0
+                val v = src[y * w + x]
+                out[y * w + x] = when {
+                    v > threshold + band -> 255
+                    v <= threshold -> 0
+                    else -> v
+                }
             }
         }
         return out

@@ -33,6 +33,10 @@ object TitleOcr {
         val page = renderFirstPage(fd) ?: return null
         try {
             val lines = readLines(api, page)
+            // 0.5.21: Dokumenttyp-Pass VOR der Wertung — sagt ein Formular
+            // selbst, was es ist („Rechnung Nr.: 269“), schlägt das jede
+            // größengewichtete Kandidatenliste.
+            documentTypeTitle(lines)?.let { typed -> clean(typed)?.let { return it } }
             // Ganzes Blatt statt oberem Drittel: Briefe tragen ihren Titel gern mittig.
             // Wertung = Zeilenhöhe × sanftes Positionsgewicht × Titelqualität ×
             // Lese-Konfidenz — Adress-, Anrede- und Formularzeilen werden so stark
@@ -163,6 +167,65 @@ object TitleOcr {
             api.clear()
             strip.recycle()
         }
+    }
+
+    /** Dokumenttyp-Wortschatz (0.5.21): gefalteter Suchschlüssel -> kanonischer Titel. */
+    private val docTypes = listOf(
+        "leistungsnachweis" to "Leistungsnachweis",
+        "rechnung" to "Rechnung",
+        "lieferschein" to "Lieferschein",
+        "attest" to "Attest",
+        "bescheid" to "Bescheid",
+        "rezept" to "Rezept",
+        "vertrag" to "Vertrag",
+        "kundigung" to "Kündigung",
+        "zeugnis" to "Zeugnis",
+        "vollmacht" to "Vollmacht"
+    )
+
+    /**
+     * Dokumenttyp-Pass (0.5.21): Formulare nennen ihre Art selbst — „Rechnung
+     * Nr.: 269“ steht klein mitten auf dem Blatt, und die Größen-Wertung
+     * erschlug genau solche Zeilen (Briefkopf und Ziffern-Quote gewannen).
+     * Regel: Steht ein Typwort als EIGENES Wort in einer kurzen Zeile (höchstens
+     * sechs Wörter), ist das der Titel — in Leserichtung gewinnt der erste
+     * Treffer, und der kanonische Name ersetzt den OCR-Text. Komposita wie
+     * „Rechnungsnummer“ oder „Rechnungsendbetrag“ zählen NICHT: nur Prefix-
+     * und Suffix-Treffer mit wenig Längen-Spielraum. Führt die Zeile selbst
+     * ein „Nr.“, hängt die längste Ziffernfolge als Nummer an. Liefert null,
+     * wenn kein Typwort steht — dann läuft die alte Wertung weiter.
+     */
+    private fun documentTypeTitle(lines: List<Line>): String? {
+        for (line in lines) {
+            val words = line.text.trim().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
+            if (words.isEmpty() || words.size > 6) continue
+            val folded = words.map { foldWord(it) }
+            val hit = docTypes.firstOrNull { (key, _) -> folded.any { typeWordMatches(it, key) } }
+                ?: continue
+            val number = if (folded.any { it == "nr" }) {
+                Regex("\\d{2,}").findAll(line.text).maxByOrNull { it.value.length }?.value
+            } else null
+            return if (number != null) "${hit.second} Nr. $number" else hit.second
+        }
+        return null
+    }
+
+    /** Klebt Umlaute und Groß-/Kleinschreibung zu Such-ASCII zusammen: „Kündigung“ -> „kundigung“. */
+    private fun foldWord(word: String): String = word.lowercase()
+        .replace("ä", "a").replace("ö", "o").replace("ü", "u").replace("ß", "ss")
+
+    /**
+     * Typwort-Treffer: exakt oder fast — das Wort muss mit Anfang und Ende des
+     * Suchschlüssels übereinstimmen und darf kaum länger sein. So bleiben
+     * Komposita wie „Rechnungsendbetrag“ draußen, leicht verbogene OCR-Lesarten
+     * („Rechrung“) aber drin.
+     */
+    private fun typeWordMatches(word: String, key: String): Boolean {
+        if (word == key) return true
+        if (word.length < key.length || word.length - key.length > 3) return false
+        val grip = maxOf(3, key.length / 3)
+        return word.startsWith(key.substring(0, grip)) &&
+            word.endsWith(key.substring(key.length - grip))
     }
 
     /**
