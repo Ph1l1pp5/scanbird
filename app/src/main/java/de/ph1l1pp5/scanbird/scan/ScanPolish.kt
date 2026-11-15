@@ -19,6 +19,8 @@ import kotlin.math.tan
  *     Scanner-Kontrast — hellgraue Briefkopfzeilen bleiben als Grauton lesbar
  *     statt unter Weiß zu verschwinden. (3) Kippung bis ±8 Grad über Profil-Bewertung geraderücken. (4) Dunkle Tischreste
  *     an den Rändern abschneiden, damit das Blatt den Rahmen füllt.
+ *     (5) Papierkorn — pures Kopierer-Weiß wird zu Papier um 250 mit feinem
+ *     Korn und Deckelschatten-Vignette.
  * Keine externe Bibliothek — nur Summentabellen und Matrizen, alles offline.
  */
 object ScanPolish {
@@ -47,7 +49,7 @@ object ScanPolish {
         var bmp = binaryToBitmap(binary, w, h)
         bmp = reframe(bmp, angle)
         bmp = trimEdgesAndFill(bmp)
-        return bmp
+        return paperGrain(bmp)
     }
 
     /** Beleuchtung plätten: großes Box-Gemittel als Hintergrundschätzung, Teilen normalisiert. */
@@ -91,16 +93,20 @@ object ScanPolish {
     }
 
     /**
-     * Sauvola-Binarisierung mit Graukeil (Band seit 0.5.21, Keil seit 0.5.23):
-     * lokale Schwelle aus Fenster-Mittelwert und -Streuung. Klar ueber der
-     * Schwelle (+Rand) wird Papierweiss, klar darunter Schrift-Schwarz — und
-     * der Streifen dazwischen wird als KEIL abgebildet: direkt ueber der
-     * Schwelle fast schwarz, am Bandrand weiss. Hellgraue Briefkopfzeilen
-     * (Absender in gedämpftem Grau) fielen unter der harten Binarisierung
+     * Sauvola-Binarisierung mit Graukeil (Band seit 0.5.21, Keil seit 0.5.23,
+     * Keil über geglättetem Ton seit 0.5.24): lokale Schwelle aus Fenster-
+     * Mittelwert und -Streuung. Klar ueber der Schwelle (+Rand) wird Papier-
+     * weiss, klar darunter Schrift-Schwarz — und der Streifen dazwischen wird
+     * als KEIL abgebildet: direkt ueber der Schwelle fast schwarz, am Bandrand
+     * weiss. Hellgraue Briefkopfzeilen fielen unter der harten Binarisierung
      * spurlos durch; das 0.5.21-Band rettete sie als Roh-Grauton, aber der
      * lag so nah an der Papierweiss, dass der Absender weich und unscharf
-     * wirkte. Der Keil drueckt dieselben Pixel dunkel und steil — lesbar
-     * und scharfkantig, ohne den Flachbett-Look zu verwässern.
+     * wirkte — der 0.5.23-Keil drueckte ihn dunkel und steil. 0.5.24 behebt
+     * die letzte Unruhe: Der Keil liest den Ton nicht mehr aus dem EINZELNEN
+     * Pixel, sondern aus seinem 3x3-Gemittel — die Sauvola-Schwelle flackert
+     * bei hellem Grau mitten durch die Buchstaben und zerriss Glyphen in
+     * Schwarz/Keil/Weiss-Flecken; das Gemittel mittelt das Flackern weg,
+     * die Zeile wird ein ruhiger, satter Grauton wie vom Flachbett.
      */
     private fun sauvola(src: IntArray, w: Int, h: Int): IntArray {
         val win = max(15, w / 32)
@@ -118,6 +124,7 @@ object ScanPolish {
                 sq[(y + 1) * iw + (x + 1)] = sq[y * iw + (x + 1)] + rsq
             }
         }
+        val smooth = smooth3(src, w, h)
         val out = IntArray(src.size)
         val half = win / 2
         val k = 0.2f
@@ -148,16 +155,79 @@ object ScanPolish {
                     v > threshold + band -> 255
                     v <= threshold -> 0
                     else -> {
-                        // Graukeil (0.5.23): Abstand zur Schwelle wird
-                        // gespreizt — Schwelle-nahe Tinte fast schwarz,
-                        // leichtester Flaum am Bandrand weiss.
-                        val o = v - threshold // 0 < o <= band
-                        (255 - (band - o) * steep).toInt().coerceIn(0, 255)
+                        // Graukeil ueber Glaettung (0.5.23 Keil, 0.5.24
+                        // Glaettung): Abstand des 3x3-Gemittels zur Schwelle
+                        // wird gespreizt — Schwelle-nahe Tinte fast schwarz,
+                        // Flaum am Bandrand weiss; Nachbarn ziehen den Ton
+                        // mit, Fleckigkeit hebt sich auf.
+                        val s = smooth[y * w + x]
+                        (255 - (band - (s - threshold)) * steep).toInt().coerceIn(0, 255)
                     }
                 }
             }
         }
         return out
+    }
+
+    /**
+     * 3x3-Box-Gemittel, separierbar in zwei Laufen (horizontal, dann vertikal),
+     * Raender geklemmt. Liefert die ruhige Tonlage, aus der der Graukeil liest.
+     */
+    private fun smooth3(src: IntArray, w: Int, h: Int): IntArray {
+        val tmp = IntArray(src.size)
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                val a = src[row + max(0, x - 1)]
+                val b = src[row + x]
+                val c = src[row + min(w - 1, x + 1)]
+                tmp[row + x] = (a + b + c) / 3
+            }
+        }
+        val out = IntArray(src.size)
+        for (y in 0 until h) {
+            val up = max(0, y - 1) * w
+            val mid = y * w
+            val down = min(h - 1, y + 1) * w
+            for (x in 0 until w) {
+                out[mid + x] = (tmp[up + x] + tmp[mid + x] + tmp[down + x]) / 3
+            }
+        }
+        return out
+    }
+
+    /**
+     * Papierkorn (0.5.24): Pures Weiss 255 wirkt steril wie vom Kopierer —
+     * Flachbett-Scans zeigen Papier um 248-252 mit feinem Korn und einem
+     * leichten Deckelschatten an den Ecken. Reine Weiss-Pixel bekommen darum
+     * Grundton 250, deterministisches Positionen-Rauschen (±2) und eine
+     * sanfte Vignette; Schrift-Schwarz und Grautone bleiben unangetastet.
+     * Tunables: Grundton 250, Vignette 0.012 (0 = aus).
+     */
+    private fun paperGrain(bmp: Bitmap): Bitmap {
+        val w = bmp.width
+        val h = bmp.height
+        val px = IntArray(w * h)
+        bmp.getPixels(px, 0, w, 0, 0, w, h)
+        val cx = (w - 1) / 2f
+        val cy = (h - 1) / 2f
+        val maxD = sqrt(cx * cx + cy * cy)
+        val vignette = 0.012f
+        for (y in 0 until h) {
+            val dy = (y - cy) / maxD
+            for (x in 0 until w) {
+                val i = y * w + x
+                if (px[i] == -0x1) { // 0xFFFFFFFF: pures Weiss
+                    val noise = ((((x * 73856093) xor (y * 19349663)) % 5) + 5) % 5 - 2
+                    val dx = (x - cx) / maxD
+                    val vig = (vignette * (dx * dx + dy * dy) * 255f).toInt()
+                    val v = (250 + noise - vig).coerceIn(0, 255)
+                    px[i] = -0x1000000 or (v shl 16) or (v shl 8) or v
+                }
+            }
+        }
+        bmp.setPixels(px, 0, w, 0, 0, w, h)
+        return bmp
     }
 
     /**

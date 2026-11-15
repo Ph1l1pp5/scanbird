@@ -28,10 +28,12 @@ object PdfWriter {
     /** Eine fertige PDF-Seite: JPEG-Bytes plus Pixelmasse. */
     data class Page(val width: Int, val height: Int, val jpeg: ByteArray)
 
-    /** Packt ein poliertes Bitmap als JPEG-Seite — das Bitmap darf danach recycelt werden. */
+    /** Packt ein poliertes Bitmap als JPEG-Seite — das Bitmap darf danach recycelt werden.
+     * Qualität 85 statt 92 (0.5.24): Büroscanner-JPEGs liegen darunter, die weichere
+     * Kompression nimmt Kanten die letzte pixelhafte Perfektion und schrumpft die Datei. */
     fun pageOf(bitmap: Bitmap): Page {
         val jpeg = ByteArrayOutputStream().use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
             out.toByteArray()
         }
         return Page(bitmap.width, bitmap.height, jpeg)
