@@ -153,36 +153,50 @@ object ScanPolish {
                 val mean = s.toFloat() / n
                 val variance = s2.toFloat() / n - mean * mean
                 val sd = if (variance > 0f) sqrt(variance) else 0f
-                var threshold = mean * (1f + k * (sd / r - 1f))
-                // Weisspunkt-Boden (0.5.25): In fast flachen Fenstern (Streuung
-                // unter 10) liegt die Sauvola-Schwelle weit unter dem Papier —
-                // hellgraue Briefkopf-Tinte, die nur 5 bis 15 Stufen dunkler
-                // ist als das Papier, galt als „klar ueber der Schwelle“ und
-                // flog zu Weiss: die Absenderzeile ueberlebte nur zur Haelfte.
-                // Der Boden zieht die Schwelle auf Mittelwert minus Band —
-                // alles messbar Dunklere als Papier faellt in den Graukeil und
-                // wird gezeichnet statt weggefegt. In Fenstern mit echtem Text
-                // (Streuung >= 10) greift der Boden nie. Tunable: Gate 10.
-                if (sd < 10f && threshold < mean - band) threshold = mean - band
+                val sauvo = mean * (1f + k * (sd / r - 1f))
+                // Weisspunkt-Boden (0.5.25, in 0.5.28 neu gefasst): In fast
+                // flachen Fenstern (Streuung unter 10) liegt die Sauvola-
+                // Schwelle weit unter dem Papier — hellgraue Briefkopf-Tinte,
+                // die nur wenige Stufen dunkler ist, flog zu Weiss. Boden-
+                // Fenster bekommen jetzt einen EIGENEN Weg: Weiss-Grenze bei
+                // Papier minus halbem Band, Schwarz-Grenze bei Papier minus
+                // eineinhalbfachem Band — und dazwischen wird blasse Tinte
+                // aus dem PAPIER-Abstand bewertet (Kern roh und satt, Flaches
+                // gemaessigt und fast weiss), nicht aus dem Abstand zur tiefen
+                // Sauvola-Schwelle. Tunable: Streuungs-Gate 10.
+                val floor = sd < 10f && sauvo < mean - band
+                val threshold = if (floor) mean - band * 1.5f else sauvo
                 val v = src[y * w + x]
+                val sm = smooth[y * w + x]
                 out[y * w + x] = when {
                     v > threshold + band -> 255
                     v <= threshold -> 0
+                    floor -> {
+                        // Boden-Fenster (0.5.28): Weiss-Grenze = Papier - 12
+                        // (halbes Band), Schwarz-Grenze = Papier - 36 (Band*1.5),
+                        // dazwischen zaehlt der Abstand zum PAPIER: Kerne (roh
+                        // mindestens halbes Band tiefer UND Umfeld mitgezogen)
+                        // nehmen vollen Kontrast aus dem echten Pixel — die
+                        // Absenderzeile wird satt statt blass. Alles Flache
+                        // (Rauschen, JPEG-Klumpen, Staub) liest den sanften Ton
+                        // aus dem 3x3-Gemittel und verwischt fast zu Weiss —
+                        // die Schlieren vom Handyfoto verschwinden. Tunables:
+                        // Kerntiefe 12 (halbes Band), Mitzieh-Gate 3, sanfte
+                        // Steilheit 3.
+                        val dRaw = mean - v
+                        val dSm = mean - sm
+                        if (dRaw >= band * 0.5f && dSm >= 3f) {
+                            (255 - dRaw * steep).toInt().coerceIn(0, 255)
+                        } else {
+                            (255 - dSm * 3f).toInt().coerceIn(0, 255)
+                        }
+                    }
                     else -> {
-                        // Zweistufiger Ton (0.5.23 Keil, 0.5.24 Glaettung,
-                        // 0.5.27 zweistufig): Die 0.5.24-Glaettung beruhigte
-                        // das Schwelle-Flackern, halbierte aber duennen grauen
-                        // Strichen ihren Kontrast — die Absenderzeile las sich
-                        // halb ausgewaschen, waehrend JPEG-Klumpen des Handy-
-                        // fotos als Schlieren durchrutschten (Philipps Screenshot-
-                        // Beweis, 16:26). Zweistufig: DERBE Tinte — Pixel roh
-                        // unter halber Bandtiefe UND Umfeld mitgezogen — nimmt
-                        // ihren Ton aus dem ECHTEN Pixel, Strichkerne behalten
-                        // vollen Kontrast. Alles Flache (Raender, Rauschen,
-                        // JPEG-Klumpen, Einzelpixel-Staub) bleibt beim geglaet-
-                        // teten Ton und verwischt zu Nichts. Tunables: 0.5
-                        // (Kerntiefe), 3 (Mitzieh-Gate).
-                        val sm = smooth[y * w + x]
+                        // Text-Fenster: zweistufiger Keil (0.5.27) — DERBE Tinte
+                        // (Pixel roh unter halber Bandtiefe UND Umfeld mitgezogen)
+                        // nimmt ihren Ton aus dem ECHTEN Pixel, Strichkerne
+                        // behalten vollen Kontrast; alles Flache bleibt beim
+                        // geglaetteten Ton und verwischt zu Nichts.
                         val base = if (v < mean - band * 0.5f && sm < mean - 3f) v else sm
                         (255 - (band - (base - threshold)) * steep).toInt().coerceIn(0, 255)
                     }
