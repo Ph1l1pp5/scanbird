@@ -20,7 +20,8 @@ import kotlin.math.tan
  *     statt unter Weiß zu verschwinden. (3) Kippung bis ±8 Grad über Profil-Bewertung geraderücken. (4) Dunkle Tischreste
  *     an den Rändern abschneiden, damit das Blatt den Rahmen füllt.
  *     (5) Papierkorn — pures Kopierer-Weiß wird zu Papier um 250 mit feinem
- *     Korn und Deckelschatten-Vignette.
+ *     Korn und Deckelschatten-Vignette. Seit 0.5.30 wischt dazwischen eine
+ *     Staub-Retusche isolierte Mini-Flecken zu Papier.
  * Keine externe Bibliothek — nur Summentabellen und Matrizen, alles offline.
  */
 object ScanPolish {
@@ -43,7 +44,9 @@ object ScanPolish {
         }
 
         val flat = flatten(gray, w, h)
-        val binary = sauvola(flat, w, h)
+        // 0.5.30: Staub-Retusche direkt nach der Sauvola — die Kippungs-
+        // Messung profitiert gleich mit (runderes Profil).
+        val binary = dustRemoval(sauvola(flat, w, h), w, h)
         val angle = estimateSkew(binary, w, h)
 
         var bmp = binaryToBitmap(binary, w, h)
@@ -138,6 +141,11 @@ object ScanPolish {
         // rund 240 Ausgangsstufen gespreizt — Tunable: Absender noch zu blass →
         // hoeher (12-14); Hintergrund fleckig → niedriger (6-8).
         val steep = 10f
+        // Boden-Kern-Steilheit (0.5.30): 12 — die blassgrau gedruckte Brief-
+        // kopfzeile zeichnet einen Hauch satter, ohne den Ton zu faelschen
+        // (das Original misst rund ein Drittel der Fliesstext-Dunkelheit).
+        // Tunable: noch matter → hoeher; Ton wirkt unecht → zurueck auf 10.
+        val floorSteep = 12f
         for (y in 0 until h) {
             val y0 = max(0, y - half)
             val y1 = min(h - 1, y + half)
@@ -184,11 +192,11 @@ object ScanPolish {
                         // sanften Ton aus dem 3x3-Gemittel und verwischt fast
                         // zu Weiss — die Schlieren vom Handyfoto verschwinden.
                         // Tunables: Kerntiefe 8 (ein Drittel Band), Mitzieh-
-                        // Gate 3, sanfte Steilheit 3.
+                        // Gate 3, sanfte Steilheit 3, Kern-Steilheit 12.
                         val dRaw = mean - v
                         val dSm = mean - sm
                         if (dRaw >= band / 3f && dSm >= 3f) {
-                            (255 - dRaw * steep).toInt().coerceIn(0, 255)
+                            (255 - dRaw * floorSteep).toInt().coerceIn(0, 255)
                         } else {
                             (255 - dSm * 3f).toInt().coerceIn(0, 255)
                         }
@@ -206,6 +214,71 @@ object ScanPolish {
             }
         }
         return out
+    }
+
+    /**
+     * Staub-Retusche (0.5.30): Isolierte Mini-Blobs werden zu Papier. Alles,
+     * was als eigener Fleck unter der Staub-Flaeche bleibt und im Isolations-
+     * Abstand keinen GROESSEREN Blob findet, ist Staub, Koernung oder JPEG-
+     * Klumpen und wird weiss. Zeichen bleiben unberuehrt: i-Punkte, Umlaut-
+     * Dots, Kommas und Satzpunkte haengen nahe an Text — nur groessere Blobs
+     * zaehlen als Nachbar, Staub neben Staub schuetzt sich nicht gegenseitig.
+     * Echte Fasern und Flecken ueber der Staub-Flaeche bleiben (authentisch).
+     * Tunables: Ton-Grenze 160 (was satt gezeichnet wurde), Staub-Flaeche
+     * 18 px (~0,26 mm² bei 200 dpi), Isolation 14 px (~1,8 mm).
+     */
+    private fun dustRemoval(gray: IntArray, w: Int, h: Int): IntArray {
+        val darkLimit = 160
+        val dustArea = 18
+        val isolation = 14
+        val label = IntArray(w * h) { -1 }
+        val queue = IntArray(w * h)
+        val areas = mutableListOf<Int>()
+        val boxes = mutableListOf<IntArray>()
+        val pixelsOf = mutableListOf<IntArray>()
+        var nextLabel = 0
+        for (i in gray.indices) {
+            if (label[i] != -1 || gray[i] >= darkLimit) continue
+            val id = nextLabel++
+            var head = 0
+            var tail = 0
+            queue[tail++] = i
+            label[i] = id
+            var minX = i % w
+            var maxX = minX
+            var minY = i / w
+            var maxY = minY
+            while (head < tail) {
+                val p = queue[head++]
+                val px = p % w
+                val py = p / w
+                if (px < minX) minX = px
+                if (px > maxX) maxX = px
+                if (py < minY) minY = py
+                if (py > maxY) maxY = py
+                if (px > 0 && label[p - 1] == -1 && gray[p - 1] < darkLimit) { label[p - 1] = id; queue[tail++] = p - 1 }
+                if (px < w - 1 && label[p + 1] == -1 && gray[p + 1] < darkLimit) { label[p + 1] = id; queue[tail++] = p + 1 }
+                if (py > 0 && label[p - w] == -1 && gray[p - w] < darkLimit) { label[p - w] = id; queue[tail++] = p - w }
+                if (py < h - 1 && label[p + w] == -1 && gray[p + w] < darkLimit) { label[p + w] = id; queue[tail++] = p + w }
+            }
+            areas.add(tail)
+            boxes.add(intArrayOf(minX, minY, maxX, maxY))
+            pixelsOf.add(queue.copyOf(tail))
+        }
+        for (id in 0 until areas.size) {
+            if (areas[id] > dustArea) continue
+            val b = boxes[id]
+            var isolated = true
+            for (other in areas.indices) {
+                if (other == id || areas[other] <= dustArea) continue
+                val o = boxes[other]
+                val dx = max(max(b[0] - o[2], o[0] - b[2]), 0)
+                val dy = max(max(b[1] - o[3], o[1] - b[3]), 0)
+                if (dx * dx + dy * dy <= isolation * isolation) { isolated = false; break }
+            }
+            if (isolated) for (p in pixelsOf[id]) gray[p] = 255
+        }
+        return gray
     }
 
     /**
