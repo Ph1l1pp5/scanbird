@@ -43,6 +43,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -100,7 +101,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(
-                colorScheme = lightColorScheme(primary = Color(0xFF2E7D32))
+                colorScheme = lightColorScheme(
+                    primary = NightSteel,
+                    onPrimary = NightGlow
+                )
             ) {
                 ScanbirdApp()
             }
@@ -109,6 +113,14 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class Screen { Verlauf, Einstellungen }
+
+/** 0.5.31: Akzent in dunklem Nachtblau mit metallischem Glanz — ersetzt das
+ *  Material-Gruen. NightSteel ist der tiefe Grundton ( Auswahl-Haken, Besta-
+ *  tigungs-Schrift in Dialogen), NightGlow der polierte Stahl-Glanz, der auf
+ *  ihm liegt. Tunables: Grundton und Glanz hier, Checkbox-Box in der
+ *  Checkbox-Composable unten. */
+private val NightSteel = Color(0xFF1C2E57)   // dunkles Nachtblau
+private val NightGlow = Color(0xFFA9C3E8)    // poliertes Stahlblau
 
 /** Signatur-Rahmen (0.5.3): Knöpfe im Pillen-Look. Seit 0.5.6 im Neon-Regenbogen
  *  statt Cyan — Regenbogen-Thermobecher-Feeling, diagonal von Pink nach Violett. */
@@ -528,7 +540,13 @@ fun VerlaufScreen(onOpenSettings: () -> Unit) {
                                     onCheckedChange = {
                                         selectedIds = if (isSelected) selectedIds - scan.id
                                         else selectedIds + scan.id
-                                    }
+                                    },
+                                    // 0.5.31: Haken glänzt poliert-stahlblau auf
+                                    // nachtblauer Box statt Material-Gruen.
+                                    colors = CheckboxDefaults.colors(
+                                        checkedColor = NightSteel,
+                                        checkmarkColor = NightGlow
+                                    )
                                 )
                             }
                             Column(modifier = Modifier.weight(1f)) {
