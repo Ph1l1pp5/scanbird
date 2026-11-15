@@ -1,0 +1,5 @@
+Scanbird ist eine schlichte Scanner-App für den Arbeitsalltag. A4-Blatt unter die Kamera, kurz stillhalten — AutoSnap knipst von selbst, wenn das Blatt ruhig im Rahmen liegt. Aus dem Foto wird offline ein gerades, entzerrtes PDF im Flachbett-Look: Beleuchtung wird plattgebügelt, Tinte satt gezeichnet, Papier bleibt Papier. Den Titel liest die App auf dem Gerät selbst — aus einer Rechnung wird der Dateiname "Rechnung Nr. 269".
+
+Dazu: Mehrseiten-Scans mit Verlauf und Vorschau, Umbenennen und Löschen, ein Knopf für die fertige Mail im eigenen Mailprogramm, und ein herstellerneutrales Cloud-Backup in einen selbst gewählten Ordner einer beliebigen Cloud — mit Restore auf dem neuen Gerät.
+
+Nur Kamera-Berechtigung. Kein Konto, keine Werbung, keine Cloud-Zwangskiste — das Gerät verlässt nur, was selbst verschickt wird.
