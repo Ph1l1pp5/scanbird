@@ -106,7 +106,10 @@ object ScanPolish {
      * Pixel, sondern aus seinem 3x3-Gemittel — die Sauvola-Schwelle flackert
      * bei hellem Grau mitten durch die Buchstaben und zerriss Glyphen in
      * Schwarz/Keil/Weiss-Flecken; das Gemittel mittelt das Flackern weg,
-     * die Zeile wird ein ruhiger, satter Grauton wie vom Flachbett.
+     * die Zeile wird ein ruhiger, satter Grauton wie vom Flachbett. Seit
+     * 0.5.25 faengt ein Weisspunkt-Boden in flachen Fenstern (Streuung
+     * unter 10) zudem Tinte, die nur wenige Stufen dunkler als Papier ist —
+     * die Sauvola-Schwelle allein hiess sie Weiss.
      */
     private fun sauvola(src: IntArray, w: Int, h: Int): IntArray {
         val win = max(15, w / 32)
@@ -149,7 +152,17 @@ object ScanPolish {
                 val mean = s.toFloat() / n
                 val variance = s2.toFloat() / n - mean * mean
                 val sd = if (variance > 0f) sqrt(variance) else 0f
-                val threshold = mean * (1f + k * (sd / r - 1f))
+                var threshold = mean * (1f + k * (sd / r - 1f))
+                // Weisspunkt-Boden (0.5.25): In fast flachen Fenstern (Streuung
+                // unter 10) liegt die Sauvola-Schwelle weit unter dem Papier —
+                // hellgraue Briefkopf-Tinte, die nur 5 bis 15 Stufen dunkler
+                // ist als das Papier, galt als „klar ueber der Schwelle“ und
+                // flog zu Weiss: die Absenderzeile ueberlebte nur zur Haelfte.
+                // Der Boden zieht die Schwelle auf Mittelwert minus Band —
+                // alles messbar Dunklere als Papier faellt in den Graukeil und
+                // wird gezeichnet statt weggefegt. In Fenstern mit echtem Text
+                // (Streuung >= 10) greift der Boden nie. Tunable: Gate 10.
+                if (sd < 10f && threshold < mean - band) threshold = mean - band
                 val v = src[y * w + x]
                 out[y * w + x] = when {
                     v > threshold + band -> 255
