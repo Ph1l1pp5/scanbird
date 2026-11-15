@@ -11,6 +11,16 @@ Scanbird ist eine schlichte Android-Scanner-App für den Arbeitsalltag: A4-Blatt
 - Der Blatttitel wird gelesen und als Namensvorschlag angeboten; Datum und Uhrzeit bleiben der zweite Vorschlag.
 - Ein Knopf öffnet die fertige Mail mit Anhang im Mailprogramm des Nutzers.
 
+## Bilder
+
+| Sucher mit AutoSnap | Ergebnis als PDF |
+| --- | --- |
+| ![Sucher mit AutoSnap](fastlane/metadata/android/de-DE/images/phoneScreenshots/3.png) | ![Ergebnis als PDF](fastlane/metadata/android/de-DE/images/phoneScreenshots/4.png) |
+
+| Verlauf mit gelesenen Titeln | Einstellungen mit Cloud-Backup |
+| --- | --- |
+| ![Verlauf](fastlane/metadata/android/de-DE/images/phoneScreenshots/1.png) | ![Einstellungen](fastlane/metadata/android/de-DE/images/phoneScreenshots/2.png) |
+
 ## Haltung
 
 - Eine sichtbare Hauptaktion pro Bildschirm. Keine Fachbegriffe.
