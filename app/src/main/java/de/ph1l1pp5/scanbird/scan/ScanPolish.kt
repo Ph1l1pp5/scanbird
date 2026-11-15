@@ -91,13 +91,16 @@ object ScanPolish {
     }
 
     /**
-     * Sauvola-Binarisierung mit Grauband (0.5.21): lokale Schwelle aus Fenster-
-     * Mittelwert und -Streuung. Klar ueber der Schwelle (+Rand) wird Papier-
-     * weiss, klar darunter wird Schrift-Schwarz — und der Streifen dazwischen
-     * BEHAELT seinen geglätteten Grauwert: Hellgraue Briefkopfzeilen (Absender
-     * in gedämpftem Grau) fielen zuvor unter das harte Weiss und verschwanden
-     * spurlos; als Grauton ueberleben sie lesbar, ohne den Flachbett-Look zu
-     * verwässern, und duenne Grau-Striche wirken gaubildschärfer.
+     * Sauvola-Binarisierung mit Graukeil (Band seit 0.5.21, Keil seit 0.5.23):
+     * lokale Schwelle aus Fenster-Mittelwert und -Streuung. Klar ueber der
+     * Schwelle (+Rand) wird Papierweiss, klar darunter Schrift-Schwarz — und
+     * der Streifen dazwischen wird als KEIL abgebildet: direkt ueber der
+     * Schwelle fast schwarz, am Bandrand weiss. Hellgraue Briefkopfzeilen
+     * (Absender in gedämpftem Grau) fielen unter der harten Binarisierung
+     * spurlos durch; das 0.5.21-Band rettete sie als Roh-Grauton, aber der
+     * lag so nah an der Papierweiss, dass der Absender weich und unscharf
+     * wirkte. Der Keil drueckt dieselben Pixel dunkel und steil — lesbar
+     * und scharfkantig, ohne den Flachbett-Look zu verwässern.
      */
     private fun sauvola(src: IntArray, w: Int, h: Int): IntArray {
         val win = max(15, w / 32)
@@ -120,6 +123,10 @@ object ScanPolish {
         val k = 0.2f
         val r = 128f
         val band = 24f
+        // Keil-Steilheit: 10 → der Bandstreifen (24 Graustufen) wird auf
+        // rund 240 Ausgangsstufen gespreizt — Tunable: Absender noch zu blass →
+        // hoeher (12-14); Hintergrund fleckig → niedriger (6-8).
+        val steep = 10f
         for (y in 0 until h) {
             val y0 = max(0, y - half)
             val y1 = min(h - 1, y + half)
@@ -140,7 +147,13 @@ object ScanPolish {
                 out[y * w + x] = when {
                     v > threshold + band -> 255
                     v <= threshold -> 0
-                    else -> v
+                    else -> {
+                        // Graukeil (0.5.23): Abstand zur Schwelle wird
+                        // gespreizt — Schwelle-nahe Tinte fast schwarz,
+                        // leichtester Flaum am Bandrand weiss.
+                        val o = v - threshold // 0 < o <= band
+                        (255 - (band - o) * steep).toInt().coerceIn(0, 255)
+                    }
                 }
             }
         }
