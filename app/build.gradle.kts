@@ -13,8 +13,17 @@ android {
         applicationId = "de.ph1l1pp5.scanbird"
         minSdk = 26
         targetSdk = 34
-        versionCode = 60
-        versionName = "0.5.31"
+        versionCode = 61
+        versionName = "0.5.32"
+
+        ndk {
+            // 0.5.32: Nur arm64-v8a einpacken. Tesseract bringt seine native
+            // Engine sonst fuer vier Prozessortypen mit (arm64, armv7, x86,
+            // x86_64) — 43 MB APK, IzzyOnDroid nimmt keine APKs ueber 30 MB.
+            // Funktion unveraendert: Jedes 64-Bit-Android-Geraet (seit ~2018,
+            // auch Pixel 5 / GrapheneOS) laedt eh nur die arm64-Kopie.
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
