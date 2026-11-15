@@ -184,48 +184,64 @@ object TitleOcr {
     )
 
     /**
-     * Dokumenttyp-Pass (0.5.21): Formulare nennen ihre Art selbst — „Rechnung
-     * Nr.: 269“ steht klein mitten auf dem Blatt, und die Größen-Wertung
-     * erschlug genau solche Zeilen (Briefkopf und Ziffern-Quote gewannen).
-     * Regel: Steht ein Typwort als EIGENES Wort in einer kurzen Zeile (höchstens
-     * sechs Wörter), ist das der Titel — in Leserichtung gewinnt der erste
-     * Treffer, und der kanonische Name ersetzt den OCR-Text. Komposita wie
-     * „Rechnungsnummer“ oder „Rechnungsendbetrag“ zählen NICHT: nur Prefix-
-     * und Suffix-Treffer mit wenig Längen-Spielraum. Führt die Zeile selbst
-     * ein „Nr.“, hängt die längste Ziffernfolge als Nummer an. Liefert null,
-     * wenn kein Typwort steht — dann läuft die alte Wertung weiter.
+     * Dokumenttyp-Pass (0.5.21, in 0.5.22 geschärft): Formulare nennen ihre
+     * Art selbst — „Rechnung Nr.: 269“ steht klein mitten auf dem Blatt, und
+     * die Größen-Wertung erschlug genau solche Zeilen (Briefkopf und Ziffern-
+     * Quote gewannen). Regel: Steht ein Typwort als EIGENES Wort in einer
+     * kurzen Zeile (höchstens sechs Wörter), ist das der Titel — in Leserichtung
+     * gewinnt der erste Treffer, und der kanonische Name ersetzt den OCR-Text.
+     * Komposita wie „Rechnungsnummer“ oder „Rechnungsendbetrag“ zählen NICHT
+     * (Zeichen-Ähnlichkeit und Längen-Spielraum halten sie fern). Nummern-
+     * Anhang: Führt die Zeile selbst kein „Nr.“, blickt der Pass auf die
+     * nächsten zwei Zeilen — Tesseract trennt „Rechnung“ und „Nr.: 269“ gern
+     * in zwei Zeilen, und dann steht die Nummer nebenan.
+     * Liefert null, wenn kein Typwort steht — dann läuft die alte Wertung weiter.
      */
     private fun documentTypeTitle(lines: List<Line>): String? {
-        for (line in lines) {
-            val words = line.text.trim().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
-            if (words.isEmpty() || words.size > 6) continue
-            val folded = words.map { foldWord(it) }
-            val hit = docTypes.firstOrNull { (key, _) -> folded.any { typeWordMatches(it, key) } }
+        for (i in lines.indices) {
+            val folded = foldTokens(lines[i].text)
+            if (folded.isEmpty() || folded.size > 6) continue
+            // Kandidaten: die eigenen Wörter plus Paar-Verklebungen — ein
+            // „Leistungs-nachweis“ mit Trennstrich zerfällt beim Splitten in
+            // zwei Buchstaben-Trümmer; die Verklebung setzt es wieder zusammen.
+            val cand = ArrayList(folded)
+            for (j in 0 until folded.size - 1) cand.add(folded[j] + folded[j + 1])
+            val hit = docTypes.firstOrNull { (key, _) -> cand.any { typeWordMatches(it, key) } }
                 ?: continue
-            val number = if (folded.any { it == "nr" }) {
-                Regex("\\d{2,}").findAll(line.text).maxByOrNull { it.value.length }?.value
-            } else null
+            var number: String? = null
+            for (j in i..minOf(i + 2, lines.lastIndex)) {
+                val fj = if (j == i) folded else foldTokens(lines[j].text)
+                if (fj.any { it == "nr" || it == "nummer" }) {
+                    number = Regex("\\d{2,}").findAll(lines[j].text).maxByOrNull { it.value.length }?.value
+                    if (number != null) break
+                }
+            }
             return if (number != null) "${hit.second} Nr. $number" else hit.second
         }
         return null
     }
+
+    /** Zeile in gefaltete Wörter splitten (Buchstaben/Ziffern, Umlaute zu Basis-ASCII). */
+    private fun foldTokens(text: String): List<String> =
+        text.trim().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }.map { foldWord(it) }
 
     /** Klebt Umlaute und Groß-/Kleinschreibung zu Such-ASCII zusammen: „Kündigung“ -> „kundigung“. */
     private fun foldWord(word: String): String = word.lowercase()
         .replace("ä", "a").replace("ö", "o").replace("ü", "u").replace("ß", "ss")
 
     /**
-     * Typwort-Treffer: exakt oder fast — das Wort muss mit Anfang und Ende des
-     * Suchschlüssels übereinstimmen und darf kaum länger sein. So bleiben
-     * Komposita wie „Rechnungsendbetrag“ draußen, leicht verbogene OCR-Lesarten
-     * („Rechrung“) aber drin.
+     * Typwort-Treffer (0.5.22): exakt oder fast — Zeichen-Ähnlichkeit Stelle
+     * für Stelle (ab 75 %) bei höchstens drei Zeichen Längen-Spielraum nach
+     * oben und zwei nach unten. So bleiben Komposita wie „Rechnungsendbetrag“
+     * (8 von 18 Stellen stimmen) draußen, verbogene OCR-Lesarten („Rechrung“,
+     * „Lelstungsnachweis“) aber drin.
      */
     private fun typeWordMatches(word: String, key: String): Boolean {
         if (word == key) return true
-        if (word.length < key.length || word.length - key.length > 3) return false
-        val grip = maxOf(3, key.length / 3)
-        return word.startsWith(key.substring(0, grip)) &&
-            word.endsWith(key.substring(key.length - grip))
+        if (word.length < key.length - 2 || word.length - key.length > 3) return false
+        var hit = 0
+        for (i in word.indices) if (i < key.length && word[i] == key[i]) hit++
+        return hit.toFloat() / word.length >= 0.75f
     }
 
     /**
